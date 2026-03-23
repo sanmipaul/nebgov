@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env};
 
 /// An operation scheduled in the timelock.
 #[contracttype]
@@ -10,7 +8,7 @@ use soroban_sdk::{
 pub struct Operation {
     pub target: Address,
     pub data: Bytes,
-    pub ready_at: u64,   // Unix timestamp when executable
+    pub ready_at: u64, // Unix timestamp when executable
     pub executed: bool,
     pub cancelled: bool,
 }
@@ -38,13 +36,7 @@ impl TimelockContract {
 
     /// Schedule an operation with a delay.
     /// TODO issue #11: implement predecessor support and salt-based id generation.
-    pub fn schedule(
-        env: Env,
-        caller: Address,
-        target: Address,
-        data: Bytes,
-        delay: u64,
-    ) -> Bytes {
+    pub fn schedule(env: Env, caller: Address, target: Address, data: Bytes, delay: u64) -> Bytes {
         caller.require_auth();
         let governor: Address = env
             .storage()
@@ -100,18 +92,14 @@ impl TimelockContract {
             .expect("operation not found");
 
         assert!(!op.executed && !op.cancelled, "invalid state");
-        assert!(
-            env.ledger().timestamp() >= op.ready_at,
-            "not ready"
-        );
+        assert!(env.ledger().timestamp() >= op.ready_at, "not ready");
 
         op.executed = true;
         env.storage()
             .persistent()
             .set(&DataKey::Operation(op_id.clone()), &op);
 
-        env.events()
-            .publish((symbol_short!("execute"),), op_id);
+        env.events().publish((symbol_short!("execute"),), op_id);
     }
 
     /// Cancel a pending operation.
@@ -140,38 +128,23 @@ impl TimelockContract {
             .persistent()
             .set(&DataKey::Operation(op_id.clone()), &op);
 
-        env.events()
-            .publish((symbol_short!("cancel"),), op_id);
+        env.events().publish((symbol_short!("cancel"),), op_id);
     }
 
     /// Check if an operation is pending (scheduled, not yet ready).
     pub fn is_pending(env: Env, op_id: Bytes) -> bool {
-        let op: Option<Operation> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Operation(op_id));
+        let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
-            Some(o) => {
-                !o.executed
-                    && !o.cancelled
-                    && env.ledger().timestamp() < o.ready_at
-            }
+            Some(o) => !o.executed && !o.cancelled && env.ledger().timestamp() < o.ready_at,
             None => false,
         }
     }
 
     /// Check if an operation is ready to execute.
     pub fn is_ready(env: Env, op_id: Bytes) -> bool {
-        let op: Option<Operation> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Operation(op_id));
+        let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
-            Some(o) => {
-                !o.executed
-                    && !o.cancelled
-                    && env.ledger().timestamp() >= o.ready_at
-            }
+            Some(o) => !o.executed && !o.cancelled && env.ledger().timestamp() >= o.ready_at,
             None => false,
         }
     }
@@ -194,8 +167,6 @@ impl TimelockContract {
             .get(&DataKey::Admin)
             .expect("not initialized");
         assert!(caller == admin, "only admin");
-        env.storage()
-            .instance()
-            .set(&DataKey::MinDelay, &new_delay);
+        env.storage().instance().set(&DataKey::MinDelay, &new_delay);
     }
 }

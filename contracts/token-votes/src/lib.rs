@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -14,10 +12,10 @@ pub struct Checkpoint {
 
 #[contracttype]
 pub enum DataKey {
-    Delegate(Address),           // delegator -> delegatee
-    Checkpoints(Address),        // account -> Vec<Checkpoint>
-    TotalCheckpoints,            // Vec<Checkpoint> for total supply
-    Token,                       // underlying SEP-41 token address
+    Delegate(Address),    // delegator -> delegatee
+    Checkpoints(Address), // account -> Vec<Checkpoint>
+    TotalCheckpoints,     // Vec<Checkpoint> for total supply
+    Token,                // underlying SEP-41 token address
     Admin,
 }
 
@@ -46,9 +44,7 @@ impl TokenVotesContract {
 
     /// Get the current delegatee of an account.
     pub fn delegates(env: Env, account: Address) -> Option<Address> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Delegate(account))
+        env.storage().persistent().get(&DataKey::Delegate(account))
     }
 
     /// Get current voting power of an account.

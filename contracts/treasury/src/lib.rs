@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Vec};
 
 /// A treasury transaction proposal.
 #[contracttype]
@@ -33,36 +31,27 @@ pub struct TreasuryContract;
 #[contractimpl]
 impl TreasuryContract {
     /// Initialize with owners, threshold, and governor address.
-    pub fn initialize(
-        env: Env,
-        owners: Vec<Address>,
-        threshold: u32,
-        governor: Address,
-    ) {
+    pub fn initialize(env: Env, owners: Vec<Address>, threshold: u32, governor: Address) {
         assert!(!owners.is_empty(), "no owners");
-        assert!(threshold > 0 && threshold <= owners.len() as u32, "bad threshold");
+        assert!(
+            threshold > 0 && threshold <= owners.len() as u32,
+            "bad threshold"
+        );
         env.storage().instance().set(&DataKey::Owners, &owners);
-        env.storage().instance().set(&DataKey::Threshold, &threshold);
+        env.storage()
+            .instance()
+            .set(&DataKey::Threshold, &threshold);
         env.storage().instance().set(&DataKey::Governor, &governor);
         env.storage().instance().set(&DataKey::TxCount, &0u64);
     }
 
     /// Submit a new transaction for approval.
     /// TODO issue #22: add owner-only guard and event emission.
-    pub fn submit(
-        env: Env,
-        proposer: Address,
-        target: Address,
-        data: Bytes,
-    ) -> u64 {
+    pub fn submit(env: Env, proposer: Address, target: Address, data: Bytes) -> u64 {
         proposer.require_auth();
         Self::require_owner(&env, &proposer);
 
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TxCount)
-            .unwrap_or(0);
+        let count: u64 = env.storage().instance().get(&DataKey::TxCount).unwrap_or(0);
         let id = count + 1;
 
         let tx = TxProposal {
@@ -120,7 +109,8 @@ impl TreasuryContract {
         }
 
         env.storage().persistent().set(&DataKey::Tx(tx_id), &tx);
-        env.events().publish((symbol_short!("approve"), approver), tx_id);
+        env.events()
+            .publish((symbol_short!("approve"), approver), tx_id);
     }
 
     /// Cancel a pending transaction. Owner or governor only.
@@ -153,7 +143,10 @@ impl TreasuryContract {
     }
 
     pub fn threshold(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::Threshold).unwrap_or(1)
+        env.storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .unwrap_or(1)
     }
 
     // --- Internal helpers ---

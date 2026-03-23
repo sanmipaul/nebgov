@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env};
 
 /// Registry entry for a deployed governor.
 #[contracttype]
@@ -41,9 +39,15 @@ impl GovernorFactoryContract {
     ) {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::GovernorWasm, &governor_wasm);
-        env.storage().instance().set(&DataKey::TimelockWasm, &timelock_wasm);
-        env.storage().instance().set(&DataKey::TokenVotesWasm, &token_votes_wasm);
+        env.storage()
+            .instance()
+            .set(&DataKey::GovernorWasm, &governor_wasm);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimelockWasm, &timelock_wasm);
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenVotesWasm, &token_votes_wasm);
         env.storage().instance().set(&DataKey::GovernorCount, &0u64);
     }
 
@@ -84,9 +88,7 @@ impl GovernorFactoryContract {
         env.storage()
             .persistent()
             .set(&DataKey::Governor(id), &entry);
-        env.storage()
-            .instance()
-            .set(&DataKey::GovernorCount, &id);
+        env.storage().instance().set(&DataKey::GovernorCount, &id);
 
         env.events().publish((symbol_short!("deploy"),), id);
 
