@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol, Vec,
+};
 
 /// An operation scheduled in the timelock.
 #[contracttype]
@@ -8,7 +10,8 @@ use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, B
 pub struct Operation {
     pub target: Address,
     pub data: Bytes,
-    pub ready_at: u64, // Unix timestamp when executable
+    pub fn_name: Symbol,   // function to invoke on the target when executed
+    pub ready_at: u64,     // Unix timestamp when executable
     pub executed: bool,
     pub cancelled: bool,
 }
@@ -35,8 +38,20 @@ impl TimelockContract {
     }
 
     /// Schedule an operation with a delay.
+    ///
+    /// Only the governor may schedule operations. The `fn_name` parameter names
+    /// the function that will be invoked on `target` when the operation executes.
+    /// Returns a Bytes op-id equal to the SHA-256 hash of `data`.
+    ///
     /// TODO issue #11: implement predecessor support and salt-based id generation.
-    pub fn schedule(env: Env, caller: Address, target: Address, data: Bytes, delay: u64) -> Bytes {
+    pub fn schedule(
+        env: Env,
+        caller: Address,
+        target: Address,
+        data: Bytes,
+        fn_name: Symbol,
+        delay: u64,
+    ) -> Bytes {
         caller.require_auth();
         let governor: Address = env
             .storage()
@@ -59,6 +74,7 @@ impl TimelockContract {
         let operation = Operation {
             target,
             data,
+            fn_name,
             ready_at,
             executed: false,
             cancelled: false,
@@ -75,7 +91,10 @@ impl TimelockContract {
     }
 
     /// Execute a ready operation.
-    /// TODO issue #11: invoke cross-contract call to target with stored data.
+    ///
+    /// Enforces the delay invariant, invokes `fn_name()` on `target` with no
+    /// arguments (calldata-with-args support is in TODO issue #11), then marks
+    /// the operation executed.
     pub fn execute(env: Env, caller: Address, op_id: Bytes) {
         caller.require_auth();
         let governor: Address = env
@@ -98,6 +117,10 @@ impl TimelockContract {
         env.storage()
             .persistent()
             .set(&DataKey::Operation(op_id.clone()), &op);
+
+        // Invoke the target contract. Args beyond the function call are encoded
+        // in op.data; passing them as structured args is in TODO issue #11.
+        env.invoke_contract::<()>(&op.target, &op.fn_name, Vec::new(&env));
 
         env.events().publish((symbol_short!("execute"),), op_id);
     }

@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 7,
+    "address": 8,
     "nonce": 0
   },
   "auth": [
@@ -59,6 +59,15 @@
                 },
                 {
                   "string": "Test proposal"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                },
+                {
+                  "symbol": "noop"
+                },
+                {
+                  "bytes": ""
                 }
               ]
             }
@@ -285,6 +294,14 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "calldata"
+                      },
+                      "val": {
+                        "bytes": ""
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "cancelled"
                       },
                       "val": {
@@ -317,6 +334,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "fn_name"
+                      },
+                      "val": {
+                        "symbol": "noop"
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "id"
                       },
                       "val": {
@@ -333,10 +358,26 @@
                     },
                     {
                       "key": {
+                        "symbol": "queued"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "start_ledger"
                       },
                       "val": {
                         "u32": 100
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "target"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
                       }
                     },
                     {

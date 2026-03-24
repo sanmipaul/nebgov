@@ -1,8 +1,27 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String,
+    contract, contractclient, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
+    Env, String, Symbol,
 };
+
+/// Cross-contract interface for the Timelock contract.
+///
+/// The governor uses this to schedule proposals after they succeed and to
+/// trigger execution once the mandatory delay has elapsed.
+#[contractclient(name = "TimelockClient")]
+pub trait TimelockTrait {
+    fn schedule(
+        env: Env,
+        caller: Address,
+        target: Address,
+        data: Bytes,
+        fn_name: Symbol,
+        delay: u64,
+    ) -> Bytes;
+    fn execute(env: Env, caller: Address, op_id: Bytes);
+    fn min_delay(env: Env) -> u64;
+}
 
 /// Proposal lifecycle states.
 /// TODO issue #1: implement full state machine transitions with timing logic.
@@ -25,6 +44,14 @@ pub struct Proposal {
     pub id: u64,
     pub proposer: Address,
     pub description: String,
+    /// Contract address that will be invoked when the proposal executes.
+    pub target: Address,
+    /// Function on `target` to call on execution (no-arg convention; full
+    /// calldata-with-args encoding is TODO issue #6).
+    pub fn_name: Symbol,
+    /// Arbitrary bytes forwarded to the timelock alongside the target. Used
+    /// to compute the operation id and, in future, to pass structured args.
+    pub calldata: Bytes,
     pub start_ledger: u32,
     pub end_ledger: u32,
     pub votes_for: i128,
@@ -32,6 +59,7 @@ pub struct Proposal {
     pub votes_abstain: i128,
     pub executed: bool,
     pub cancelled: bool,
+    pub queued: bool,
 }
 
 /// Placeholder type for future storage migration data.
@@ -72,6 +100,8 @@ pub enum DataKey {
     Admin,
     HasVoted(u64, Address),
     VoteReason(u64, Address),
+    /// The timelock op-id (Bytes) for a proposal after queue() is called.
+    QueuedOpId(u64),
 }
 
 #[contract]
@@ -112,8 +142,19 @@ impl GovernorContract {
     }
 
     /// Create a new governance proposal.
-    /// TODO issue #2: add calldata encoding, threshold check, and event emission.
-    pub fn propose(env: Env, proposer: Address, description: String) -> u64 {
+    ///
+    /// `target` and `fn_name` identify the contract function to invoke if the
+    /// proposal succeeds and is executed via the timelock. `calldata` is
+    /// forwarded to the timelock's schedule call and used to derive the
+    /// operation id. TODO issue #2: add threshold check.
+    pub fn propose(
+        env: Env,
+        proposer: Address,
+        description: String,
+        target: Address,
+        fn_name: Symbol,
+        calldata: Bytes,
+    ) -> u64 {
         proposer.require_auth();
 
         let count: u64 = env
@@ -139,6 +180,9 @@ impl GovernorContract {
             id: proposal_id,
             proposer: proposer.clone(),
             description,
+            target,
+            fn_name,
+            calldata,
             start_ledger: current + voting_delay,
             end_ledger: current + voting_delay + voting_period,
             votes_for: 0,
@@ -146,6 +190,7 @@ impl GovernorContract {
             votes_abstain: 0,
             executed: false,
             cancelled: false,
+            queued: false,
         };
 
         env.storage()
@@ -162,7 +207,7 @@ impl GovernorContract {
     }
 
     /// Cast a vote on an active proposal.
-    /// TODO issue #3: add deduplication check, voting power lookup, and event.
+    /// TODO issue #3: add voting power lookup from token-votes contract.
     pub fn cast_vote(env: Env, voter: Address, proposal_id: u64, support: VoteSupport) {
         voter.require_auth();
 
@@ -221,36 +266,89 @@ impl GovernorContract {
         );
     }
 
-    /// Queue a succeeded proposal for execution via timelock.
-    /// TODO issue #5: integrate timelock contract cross-contract call.
+    /// Queue a succeeded proposal for execution via the timelock.
+    ///
+    /// Reads the timelock's configured `min_delay` and schedules the proposal's
+    /// target invocation. The returned op-id is stored so `execute()` can
+    /// reference it later.
     pub fn queue(env: Env, proposal_id: u64) {
+        assert!(
+            Self::state(env.clone(), proposal_id) == ProposalState::Succeeded,
+            "proposal not succeeded"
+        );
+
         let mut proposal: Proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .expect("proposal not found");
-        assert!(!proposal.executed && !proposal.cancelled, "invalid state");
-        // TODO: verify state == Succeeded, then call timelock.schedule().
-        proposal.executed = false; // placeholder
+
+        let timelock_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Timelock)
+            .expect("timelock not set");
+        let gov_addr = env.current_contract_address();
+        let timelock = TimelockClient::new(&env, &timelock_addr);
+
+        // Use the timelock's own minimum delay to guarantee the configured
+        // execution window is respected.
+        let delay = timelock.min_delay();
+        let op_id = timelock.schedule(
+            &gov_addr,
+            &proposal.target,
+            &proposal.calldata,
+            &proposal.fn_name,
+            &delay,
+        );
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::QueuedOpId(proposal_id), &op_id);
+
+        proposal.queued = true;
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
+
         env.events().publish((symbol_short!("queue"),), proposal_id);
     }
 
     /// Execute a queued proposal.
-    /// TODO issue #6: call timelock.execute() with stored calldata.
+    ///
+    /// Delegates to the timelock to enforce the delay, which in turn invokes
+    /// `proposal.fn_name()` on `proposal.target`.
     pub fn execute(env: Env, proposal_id: u64) {
+        assert!(
+            Self::state(env.clone(), proposal_id) == ProposalState::Queued,
+            "proposal not queued"
+        );
+
         let mut proposal: Proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .expect("proposal not found");
-        assert!(!proposal.executed && !proposal.cancelled, "invalid state");
+
+        let timelock_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Timelock)
+            .expect("timelock not set");
+        let gov_addr = env.current_contract_address();
+        let op_id: Bytes = env
+            .storage()
+            .persistent()
+            .get(&DataKey::QueuedOpId(proposal_id))
+            .expect("no op id — call queue() first");
+
+        TimelockClient::new(&env, &timelock_addr).execute(&gov_addr, &op_id);
+
         proposal.executed = true;
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
+
         env.events()
             .publish((symbol_short!("execute"),), proposal_id);
     }
@@ -282,7 +380,10 @@ impl GovernorContract {
     }
 
     /// Get the current state of a proposal.
-    /// TODO issue #1: implement full timing-aware state transitions.
+    ///
+    /// After the voting period ends, the proposal is Succeeded when it has at
+    /// least one For vote and more For votes than Against votes (simple
+    /// majority). Quorum via historical token supply is TODO issue #8.
     pub fn state(env: Env, proposal_id: u64) -> ProposalState {
         let proposal: Proposal = env
             .storage()
@@ -296,14 +397,19 @@ impl GovernorContract {
         if proposal.executed {
             return ProposalState::Executed;
         }
+        if proposal.queued {
+            return ProposalState::Queued;
+        }
 
         let current = env.ledger().sequence();
         if current < proposal.start_ledger {
             ProposalState::Pending
         } else if current <= proposal.end_ledger {
             ProposalState::Active
+        } else if proposal.votes_for > 0 && proposal.votes_for > proposal.votes_against {
+            // Simple majority — quorum check against total supply is TODO issue #8.
+            ProposalState::Succeeded
         } else {
-            // TODO: check quorum and votes_for > votes_against
             ProposalState::Defeated
         }
     }
@@ -404,8 +510,23 @@ mod test {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Events},
-        Env, TryIntoVal,
+        Bytes, Env, Symbol, TryIntoVal,
     };
+
+    /// Shared helper: initialize the governor and return a proposal id using a
+    /// dummy target so the existing vote-with-reason tests remain focused on
+    /// their specific behaviour without needing a real timelock or target.
+    fn propose_dummy(
+        env: &Env,
+        client: &GovernorContractClient,
+        proposer: &Address,
+    ) -> u64 {
+        let target = Address::generate(env);
+        let fn_name = Symbol::new(env, "noop");
+        let calldata = Bytes::new(env);
+        let description = String::from_str(env, "Test proposal");
+        client.propose(proposer, &description, &target, &fn_name, &calldata)
+    }
 
     #[test]
     fn test_cast_vote_with_reason_stores_reason() {
@@ -422,8 +543,7 @@ mod test {
 
         client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
 
-        let description = String::from_str(&env, "Test proposal");
-        let proposal_id = client.propose(&proposer, &description);
+        let proposal_id = propose_dummy(&env, &client, &proposer);
 
         let reason = String::from_str(&env, "I support this because it improves governance");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
@@ -447,8 +567,7 @@ mod test {
 
         client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
 
-        let description = String::from_str(&env, "Test proposal");
-        let proposal_id = client.propose(&proposer, &description);
+        let proposal_id = propose_dummy(&env, &client, &proposer);
 
         let reason = String::from_str(&env, "This aligns with our community values");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
@@ -483,8 +602,7 @@ mod test {
 
         client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
 
-        let description = String::from_str(&env, "Test proposal");
-        let proposal_id = client.propose(&proposer, &description);
+        let proposal_id = propose_dummy(&env, &client, &proposer);
 
         let reason1 = String::from_str(&env, "I agree with this proposal");
         let reason2 = String::from_str(&env, "I disagree with this proposal");
@@ -492,92 +610,13 @@ mod test {
         client.cast_vote_with_reason(&voter1, &proposal_id, &VoteSupport::For, &reason1);
         client.cast_vote_with_reason(&voter2, &proposal_id, &VoteSupport::Against, &reason2);
 
-        assert_eq!(client.get_vote_reason(&proposal_id, &voter1), Some(reason1));
-        assert_eq!(client.get_vote_reason(&proposal_id, &voter2), Some(reason2));
+        let stored_reason1 = client.get_vote_reason(&proposal_id, &voter1);
+        let stored_reason2 = client.get_vote_reason(&proposal_id, &voter2);
+
+        assert_eq!(stored_reason1, Some(reason1));
+        assert_eq!(stored_reason2, Some(reason2));
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::{
-        testutils::{Address as _, MockAuth, MockAuthInvoke},
-        BytesN, Env, IntoVal,
-    };
-
-    // ── upgrade ──────────────────────────────────────────────────────────────
-    // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires
-    // a compiled WASM binary uploaded via env.deployer().upload_contract_wasm().
-    // That path is covered by integration tests run after `cargo build --target
-    // wasm32-unknown-unknown`. The unit tests below focus on the auth guard,
-    // which is the security-critical invariant.
-
-    #[test]
-    #[should_panic]
-    fn upgrade_rejects_caller_that_is_not_the_contract_address() {
-        // Fresh env — no mock_all_auths. We mock auth as a random attacker so
-        // that the contract's own require_auth check finds no matching mock
-        // and panics with an auth error.
-        let env = Env::default();
-        let contract_id = env.register(GovernorContract, ());
-        let client = GovernorContractClient::new(&env, &contract_id);
-
-        let attacker = Address::generate(&env);
-        let new_wasm_hash = BytesN::from_array(&env, &[2u8; 32]);
-
-        // Only `attacker` is mocked, not `contract_id`. upgrade() calls
-        // env.current_contract_address().require_auth() which looks for
-        // (contract_id, "upgrade") — it won't find it and panics.
-        env.mock_auths(&[MockAuth {
-            address: &attacker,
-            invoke: &MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "upgrade",
-                args: (new_wasm_hash.clone(),).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-
-        client.upgrade(&new_wasm_hash);
-    }
-
-    #[test]
-    #[should_panic]
-    fn upgrade_rejects_admin_acting_as_direct_caller() {
-        // Even the stored admin cannot bypass the contract-self auth guard.
-        // The only valid upgrade path is through an executed on-chain proposal.
-        let env = Env::default();
-        let admin = Address::generate(&env);
-        let votes_token = Address::generate(&env);
-        let timelock = Address::generate(&env);
-        let contract_id = env.register(GovernorContract, ());
-
-        env.mock_all_auths();
-        GovernorContractClient::new(&env, &contract_id).initialize(
-            &admin,
-            &votes_token,
-            &timelock,
-            &100u32,
-            &1000u32,
-            &40u32,
-            &0i128,
-        );
-
-        let new_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
-        let client = GovernorContractClient::new(&env, &contract_id);
-
-        // Replace mock_all_auths with a specific mock for admin only.
-        // The upgrade guard requires contract_id, not admin — must panic.
-        env.mock_auths(&[MockAuth {
-            address: &admin,
-            invoke: &MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "upgrade",
-                args: (new_wasm_hash.clone(),).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-
-        client.upgrade(&new_wasm_hash);
-    }
-}
+mod tests;
