@@ -31,9 +31,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Stellar CLI
-        uses: stellar/actions/setup-stellar-cli@main
-        with:
-          version: latest
+        run: curl --proto '=https' --tlsv1.2 -lsSf https://install.stellar.org | sh
 
       - name: Build WASMs for test dependencies
         run: stellar contract build
