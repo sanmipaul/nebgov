@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, Address, Bytes, Env,
-    String, Symbol,
+    contract, contractclient, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
+    Env, String, Symbol,
 };
 
 /// Cross-contract interface for the Timelock contract.
@@ -60,6 +60,21 @@ pub struct Proposal {
     pub executed: bool,
     pub cancelled: bool,
     pub queued: bool,
+}
+
+/// Placeholder type for future storage migration data.
+///
+/// When a contract upgrade introduces a breaking change to the on-chain
+/// storage layout, add the required migration values as fields here and
+/// implement the migration logic inside [`GovernorContract::migrate`].
+///
+/// `new_version` is a monotonically increasing counter that callers must
+/// supply so the migration can be applied exactly once per upgrade.
+#[contracttype]
+pub struct MigrateData {
+    /// Monotonically increasing schema version written by this migration.
+    /// Extend this struct with additional fields as the storage layout evolves.
+    pub new_version: u32,
 }
 
 /// Vote support options.
@@ -279,8 +294,13 @@ impl GovernorContract {
         // Use the timelock's own minimum delay to guarantee the configured
         // execution window is respected.
         let delay = timelock.min_delay();
-        let op_id =
-            timelock.schedule(&gov_addr, &proposal.target, &proposal.calldata, &proposal.fn_name, &delay);
+        let op_id = timelock.schedule(
+            &gov_addr,
+            &proposal.target,
+            &proposal.calldata,
+            &proposal.fn_name,
+            &delay,
+        );
 
         env.storage()
             .persistent()
@@ -443,6 +463,45 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .get(&DataKey::VoteReason(proposal_id, voter))
+    }
+
+    /// Upgrade the governor contract to a new WASM implementation.
+    ///
+    /// Authorization is restricted to the governor's own contract address.
+    /// This means the call must originate from an executed on-chain proposal:
+    /// the timelock invokes `upgrade` on behalf of a passed vote, with the
+    /// governor contract itself as the authorised principal.
+    ///
+    /// Upgrade flow:
+    ///   1. A proposer creates a proposal whose calldata targets `upgrade(hash)`
+    ///   2. Token holders vote; quorum and majority are reached
+    ///   3. The proposal is queued in the Timelock with the configured delay
+    ///   4. After the delay, anyone triggers execution
+    ///   5. The Timelock calls `governor.upgrade(hash)` as an authorised
+    ///      sub-invocation of the contract's own address
+    ///   6. `env.deployer().update_current_contract_wasm` replaces the WASM;
+    ///      the contract address, balance, and storage all remain intact
+    ///
+    /// If the new WASM changes the storage layout, call `migrate` immediately
+    /// after this in the same proposal's calldata.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        env.current_contract_address().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events().publish((symbol_short!("upgrade"),), new_wasm_hash);
+    }
+
+    /// Migrate contract storage after a WASM upgrade.
+    ///
+    /// Like `upgrade`, this can only be called from the governor's own address
+    /// and must therefore be triggered through an executed on-chain proposal.
+    ///
+    /// This is a no-op stub. When a future upgrade introduces changes to the
+    /// on-chain storage layout, extend [`MigrateData`] with the required
+    /// values and implement the migration logic here.
+    pub fn migrate(env: Env, _data: MigrateData) {
+        env.current_contract_address().require_auth();
+        // TODO: implement storage migration logic when a breaking storage
+        // change is introduced in a future upgrade.
     }
 }
 
