@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, String,
+};
 
 /// Proposal lifecycle states.
 /// TODO issue #1: implement full state machine transitions with timing logic.
@@ -30,6 +32,21 @@ pub struct Proposal {
     pub votes_abstain: i128,
     pub executed: bool,
     pub cancelled: bool,
+}
+
+/// Placeholder type for future storage migration data.
+///
+/// When a contract upgrade introduces a breaking change to the on-chain
+/// storage layout, add the required migration values as fields here and
+/// implement the migration logic inside [`GovernorContract::migrate`].
+///
+/// `new_version` is a monotonically increasing counter that callers must
+/// supply so the migration can be applied exactly once per upgrade.
+#[contracttype]
+pub struct MigrateData {
+    /// Monotonically increasing schema version written by this migration.
+    /// Extend this struct with additional fields as the storage layout evolves.
+    pub new_version: u32,
 }
 
 /// Vote support options.
@@ -341,6 +358,45 @@ impl GovernorContract {
             .persistent()
             .get(&DataKey::VoteReason(proposal_id, voter))
     }
+
+    /// Upgrade the governor contract to a new WASM implementation.
+    ///
+    /// Authorization is restricted to the governor's own contract address.
+    /// This means the call must originate from an executed on-chain proposal:
+    /// the timelock invokes `upgrade` on behalf of a passed vote, with the
+    /// governor contract itself as the authorised principal.
+    ///
+    /// Upgrade flow:
+    ///   1. A proposer creates a proposal whose calldata targets `upgrade(hash)`
+    ///   2. Token holders vote; quorum and majority are reached
+    ///   3. The proposal is queued in the Timelock with the configured delay
+    ///   4. After the delay, anyone triggers execution
+    ///   5. The Timelock calls `governor.upgrade(hash)` as an authorised
+    ///      sub-invocation of the contract's own address
+    ///   6. `env.deployer().update_current_contract_wasm` replaces the WASM;
+    ///      the contract address, balance, and storage all remain intact
+    ///
+    /// If the new WASM changes the storage layout, call `migrate` immediately
+    /// after this in the same proposal's calldata.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        env.current_contract_address().require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.events().publish((symbol_short!("upgrade"),), new_wasm_hash);
+    }
+
+    /// Migrate contract storage after a WASM upgrade.
+    ///
+    /// Like `upgrade`, this can only be called from the governor's own address
+    /// and must therefore be triggered through an executed on-chain proposal.
+    ///
+    /// This is a no-op stub. When a future upgrade introduces changes to the
+    /// on-chain storage layout, extend [`MigrateData`] with the required
+    /// values and implement the migration logic here.
+    pub fn migrate(env: Env, _data: MigrateData) {
+        env.current_contract_address().require_auth();
+        // TODO: implement storage migration logic when a breaking storage
+        // change is introduced in a future upgrade.
+    }
 }
 
 #[cfg(test)]
@@ -354,7 +410,7 @@ mod test {
     #[test]
     fn test_cast_vote_with_reason_stores_reason() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock all auth checks
+        env.mock_all_auths();
         let contract_id = env.register(GovernorContract, ());
         let client = GovernorContractClient::new(&env, &contract_id);
 
@@ -364,18 +420,14 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        // Initialize the governor
         client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
 
-        // Create a proposal
         let description = String::from_str(&env, "Test proposal");
         let proposal_id = client.propose(&proposer, &description);
 
-        // Cast vote with reason
         let reason = String::from_str(&env, "I support this because it improves governance");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
 
-        // Verify reason is stored
         let stored_reason = client.get_vote_reason(&proposal_id, &voter);
         assert_eq!(stored_reason, Some(reason));
     }
@@ -383,7 +435,7 @@ mod test {
     #[test]
     fn test_cast_vote_with_reason_emits_event() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock all auth checks
+        env.mock_all_auths();
         let contract_id = env.register(GovernorContract, ());
         let client = GovernorContractClient::new(&env, &contract_id);
 
@@ -393,25 +445,17 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        // Initialize the governor
         client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
 
-        // Create a proposal
         let description = String::from_str(&env, "Test proposal");
         let proposal_id = client.propose(&proposer, &description);
 
-        // Cast vote with reason
         let reason = String::from_str(&env, "This aligns with our community values");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
 
-        // Verify events were emitted (both "vote" and "vote_rsn")
         let events = env.events().all();
-
-        // Should have events including: propose, vote, vote_rsn
-        // Note: Not checking exact count as auth mocking may add events
         assert!(events.len() >= 2);
 
-        // Verify vote_rsn event is emitted by checking event topics
         let has_vote_rsn = events.iter().any(|(_, topics, _)| {
             topics.len() >= 1 && {
                 let first: Result<soroban_sdk::Symbol, _> =
@@ -426,7 +470,7 @@ mod test {
     #[test]
     fn test_cast_vote_with_reason_multiple_voters() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock all auth checks
+        env.mock_all_auths();
         let contract_id = env.register(GovernorContract, ());
         let client = GovernorContractClient::new(&env, &contract_id);
 
@@ -437,25 +481,103 @@ mod test {
         let voter1 = Address::generate(&env);
         let voter2 = Address::generate(&env);
 
-        // Initialize the governor
         client.initialize(&admin, &votes_token, &timelock, &100, &1000, &50, &1000);
 
-        // Create a proposal
         let description = String::from_str(&env, "Test proposal");
         let proposal_id = client.propose(&proposer, &description);
 
-        // Cast votes with different reasons
         let reason1 = String::from_str(&env, "I agree with this proposal");
         let reason2 = String::from_str(&env, "I disagree with this proposal");
 
         client.cast_vote_with_reason(&voter1, &proposal_id, &VoteSupport::For, &reason1);
         client.cast_vote_with_reason(&voter2, &proposal_id, &VoteSupport::Against, &reason2);
 
-        // Verify both reasons are stored correctly
-        let stored_reason1 = client.get_vote_reason(&proposal_id, &voter1);
-        let stored_reason2 = client.get_vote_reason(&proposal_id, &voter2);
+        assert_eq!(client.get_vote_reason(&proposal_id, &voter1), Some(reason1));
+        assert_eq!(client.get_vote_reason(&proposal_id, &voter2), Some(reason2));
+    }
+}
 
-        assert_eq!(stored_reason1, Some(reason1));
-        assert_eq!(stored_reason2, Some(reason2));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, MockAuth, MockAuthInvoke},
+        BytesN, Env, IntoVal,
+    };
+
+    // ── upgrade ──────────────────────────────────────────────────────────────
+    // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires
+    // a compiled WASM binary uploaded via env.deployer().upload_contract_wasm().
+    // That path is covered by integration tests run after `cargo build --target
+    // wasm32-unknown-unknown`. The unit tests below focus on the auth guard,
+    // which is the security-critical invariant.
+
+    #[test]
+    #[should_panic]
+    fn upgrade_rejects_caller_that_is_not_the_contract_address() {
+        // Fresh env — no mock_all_auths. We mock auth as a random attacker so
+        // that the contract's own require_auth check finds no matching mock
+        // and panics with an auth error.
+        let env = Env::default();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let attacker = Address::generate(&env);
+        let new_wasm_hash = BytesN::from_array(&env, &[2u8; 32]);
+
+        // Only `attacker` is mocked, not `contract_id`. upgrade() calls
+        // env.current_contract_address().require_auth() which looks for
+        // (contract_id, "upgrade") — it won't find it and panics.
+        env.mock_auths(&[MockAuth {
+            address: &attacker,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "upgrade",
+                args: (new_wasm_hash.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        client.upgrade(&new_wasm_hash);
+    }
+
+    #[test]
+    #[should_panic]
+    fn upgrade_rejects_admin_acting_as_direct_caller() {
+        // Even the stored admin cannot bypass the contract-self auth guard.
+        // The only valid upgrade path is through an executed on-chain proposal.
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let votes_token = Address::generate(&env);
+        let timelock = Address::generate(&env);
+        let contract_id = env.register(GovernorContract, ());
+
+        env.mock_all_auths();
+        GovernorContractClient::new(&env, &contract_id).initialize(
+            &admin,
+            &votes_token,
+            &timelock,
+            &100u32,
+            &1000u32,
+            &40u32,
+            &0i128,
+        );
+
+        let new_wasm_hash = BytesN::from_array(&env, &[3u8; 32]);
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        // Replace mock_all_auths with a specific mock for admin only.
+        // The upgrade guard requires contract_id, not admin — must panic.
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "upgrade",
+                args: (new_wasm_hash.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        client.upgrade(&new_wasm_hash);
     }
 }
