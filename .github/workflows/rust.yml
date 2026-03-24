@@ -30,6 +30,14 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install Stellar CLI
+        uses: stellar/actions/setup-stellar-cli@main
+        with:
+          version: latest
+
+      - name: Build WASMs for test dependencies
+        run: stellar contract build
+
       - name: Run tests
         run: cargo test --workspace
 
