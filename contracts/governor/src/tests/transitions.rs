@@ -1,7 +1,26 @@
 use crate::*;
 use soroban_sdk::{
-    testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env, String, Symbol,
+    contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env,
+    String, Symbol,
 };
+
+/// Mock votes contract that returns a high vote count for any address,
+/// allowing propose() to pass the threshold check in tests.
+#[contract]
+pub struct MockVotesContract;
+
+#[contractimpl]
+impl MockVotesContract {
+    pub fn get_votes(_env: Env, _account: Address) -> i128 {
+        // Return a high vote count that exceeds any reasonable threshold
+        1_000_000
+    }
+
+    pub fn get_past_total_supply(_env: Env, _ledger: u32) -> i128 {
+        // Return a fixed total supply for quorum calculations in tests
+        10_000_000
+    }
+}
 
 /// Shared helper: initialize the governor with standard test parameters.
 fn setup() -> (
@@ -17,13 +36,13 @@ fn setup() -> (
     let client = GovernorContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let votes_token = Address::generate(&env);
+    let votes_token_id = env.register(MockVotesContract, ());
     let timelock = Address::generate(&env);
     let proposer = Address::generate(&env);
     let voter = Address::generate(&env);
 
     // voting_delay=10, voting_period=100, quorum_numerator=0, proposal_threshold=0
-    client.initialize(&admin, &votes_token, &timelock, &10, &100, &0, &0);
+    client.initialize(&admin, &votes_token_id, &timelock, &10, &100, &0, &0);
 
     (env, client, admin, proposer, voter)
 }
@@ -31,10 +50,21 @@ fn setup() -> (
 /// Shared helper: create a new proposal and return its id.
 fn make_proposal(env: &Env, client: &GovernorContractClient, proposer: &Address) -> u64 {
     let target = Address::generate(env);
-    let fn_name = Symbol::new(env, "noop");
+    let fn_name = Symbol::new(env, "exec");
     let calldata = Bytes::new(env);
     let description = String::from_str(env, "Test proposal");
-    client.propose(proposer, &description, &target, &fn_name, &calldata)
+
+    // Create Vec with single target, fn_name, and calldata
+    let mut targets = soroban_sdk::Vec::new(env);
+    targets.push_back(target);
+
+    let mut fn_names = soroban_sdk::Vec::new(env);
+    fn_names.push_back(fn_name);
+
+    let mut calldatas = soroban_sdk::Vec::new(env);
+    calldatas.push_back(calldata);
+
+    client.propose(proposer, &description, &targets, &fn_names, &calldatas)
 }
 
 #[test]
@@ -160,8 +190,8 @@ fn test_proposal_execution_lifecycle() {
     let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
     timelock_client.initialize(&admin, &client.address, &0); // min_delay = 0
 
-    let votes_token = Address::generate(&env);
-    client.initialize(&admin, &votes_token, &timelock_id, &10, &100, &0, &0);
+    let votes_token_id = env.register(MockVotesContract, ());
+    client.initialize(&admin, &votes_token_id, &timelock_id, &10, &100, &0, &0);
 
     client.queue(&proposal_id);
     assert_eq!(client.state(&proposal_id), ProposalState::Queued);
@@ -175,7 +205,10 @@ fn test_proposal_execution_lifecycle() {
     let calldata = Bytes::new(&env);
 
     // Proposal 2 will be created at current ledger (111)
-    let proposal_id = client.propose(&proposer, &description, &dummy_id, &fn_name, &calldata);
+    let targets = Vec::from_array(&env, [dummy_id.clone()]);
+    let fn_names = Vec::from_array(&env, [fn_name.clone()]);
+    let calldatas = Vec::from_array(&env, [calldata.clone()]);
+    let proposal_id = client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
 
     // Proposal 2 timing:
     // start_ledger = 111 + 10 = 121

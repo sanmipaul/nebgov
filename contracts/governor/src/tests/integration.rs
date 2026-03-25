@@ -105,10 +105,10 @@ fn test_full_proposal_lifecycle() {
         &admin,
         &votes_id,
         &timelock_id,
-        &10_u32, // voting_delay
-        &20_u32, // voting_period
-        &50_u32, // quorum_numerator (not yet enforced — TODO issue #8)
-        &0_i128, // proposal_threshold
+        &10_u32,  // voting_delay
+        &20_u32,  // voting_period
+        &0_u32,   // quorum_numerator (set to 0 for this simple majority test)
+        &0_i128,  // proposal_threshold
     );
 
     // ------------------------------------------------------------------
@@ -137,14 +137,19 @@ fn test_full_proposal_lifecycle() {
     let calldata = Bytes::from_slice(&env, b"governance-proposal-1");
     let description = soroban_sdk::String::from_str(&env, "Execute mock governance action");
 
+    // Create Vec with single target, fn_name, and calldata
+    let mut targets = soroban_sdk::Vec::new(&env);
+    targets.push_back(mock_target_id.clone());
+
+    let mut fn_names = soroban_sdk::Vec::new(&env);
+    fn_names.push_back(fn_name);
+
+    let mut calldatas = soroban_sdk::Vec::new(&env);
+    calldatas.push_back(calldata);
+
     // Ledger starts at 0; start_ledger = 0 + 10 = 10, end_ledger = 0 + 30.
-    let proposal_id = governor_client.propose(
-        &proposer,
-        &description,
-        &mock_target_id,
-        &fn_name,
-        &calldata,
-    );
+    let proposal_id =
+        governor_client.propose(&proposer, &description, &targets, &fn_names, &calldatas);
     assert_eq!(proposal_id, 1);
 
     // Immediately after proposal creation the state is Pending.
