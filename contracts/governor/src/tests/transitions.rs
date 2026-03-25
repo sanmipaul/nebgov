@@ -112,6 +112,24 @@ fn test_defeated_when_against_wins() {
 }
 
 #[test]
+/// Verifies that a proposal is Defeated if voting ends in a tie
+/// (votes_against == votes_for).
+fn test_defeated_when_votes_for_equals_votes_against() {
+    let (env, client, _, proposer, voter_for) = setup();
+    let voter_against = Address::generate(&env);
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    // Active state.
+    env.ledger().set_sequence_number(10);
+    client.cast_vote(&voter_for, &proposal_id, &VoteSupport::For);
+    client.cast_vote(&voter_against, &proposal_id, &VoteSupport::Against);
+
+    // Past end_ledger.
+    env.ledger().set_sequence_number(111);
+    assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
+}
+
+#[test]
 /// Verifies that a proposal is Succeeded if it has at least one For vote and matches majority.
 fn test_succeeded_with_majority() {
     let (env, client, _, proposer, voter1) = setup();
