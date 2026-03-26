@@ -32,6 +32,88 @@ jobs:
       - name: Test SDK
         run: pnpm test:sdk
 
+  # ---------------------------------------------------------------------------
+  # Integration tests — deploy contracts to Stellar testnet, then run the SDK
+  # integration suite against them.
+  #
+  # Requires the TESTNET_SECRET_KEY repository secret. To set it up:
+  #   1. Generate a testnet keypair:  stellar keys generate --global ci-deployer --network testnet
+  #   2. Show the secret:             stellar keys show ci-deployer
+  #   3. Add it as a GitHub Actions secret named TESTNET_SECRET_KEY
+  #      (Settings → Secrets and variables → Actions → New repository secret)
+  #
+  # The job is skipped on forks and when the secret is not available.
+  # ---------------------------------------------------------------------------
+  sdk-integration:
+    name: SDK Integration Tests (testnet)
+    runs-on: ubuntu-latest
+    needs: sdk
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Stellar CLI
+        run: cargo install --locked stellar-cli
+
+      - name: Deploy contracts to testnet
+        run: |
+          # Create identity from the CI secret
+          stellar keys add ci-deployer --secret-key --global <<< "${{ secrets.TESTNET_SECRET_KEY }}"
+          stellar keys fund ci-deployer --network testnet || true
+
+          export STELLAR_IDENTITY=ci-deployer
+          export STELLAR_NETWORK=testnet
+
+          chmod +x scripts/deploy-testnet.sh
+          ./scripts/deploy-testnet.sh
+
+          # Export deployed addresses for the test step
+          set -a
+          source .env.testnet
+          set +a
+
+          echo "GOVERNOR_ADDRESS=$GOVERNOR_ADDRESS"   >> "$GITHUB_ENV"
+          echo "TIMELOCK_ADDRESS=$TIMELOCK_ADDRESS"    >> "$GITHUB_ENV"
+          echo "TOKEN_VOTES_ADDRESS=$TOKEN_VOTES_ADDRESS" >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build SDK
+        run: pnpm build:sdk
+
+      - name: Run integration tests
+        env:
+          TESTNET_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
+        run: pnpm test:sdk -- --testPathPattern='integration'
+
   app:
     name: App Build
     runs-on: ubuntu-latest
