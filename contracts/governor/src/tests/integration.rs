@@ -15,7 +15,7 @@
 //!   8. Call `execute()` and verify the mock target function was invoked
 //!   9. Verify final governor state is Executed
 
-use crate::{GovernorContract, GovernorContractClient, ProposalState, VoteSupport};
+use crate::{GovernorContract, GovernorContractClient, Proposal, ProposalState, VoteSupport};
 
 use soroban_sdk::{
     contract, contractimpl,
@@ -105,10 +105,10 @@ fn test_full_proposal_lifecycle() {
         &admin,
         &votes_id,
         &timelock_id,
-        &10_u32,  // voting_delay
-        &20_u32,  // voting_period
-        &0_u32,   // quorum_numerator (set to 0 for this simple majority test)
-        &0_i128,  // proposal_threshold
+        &10_u32, // voting_delay
+        &20_u32, // voting_period
+        &0_u32,  // quorum_numerator (set to 0 for this simple majority test)
+        &0_i128, // proposal_threshold
     );
 
     // ------------------------------------------------------------------
@@ -214,10 +214,13 @@ fn test_full_proposal_lifecycle() {
     // Confirm the timelock received the schedule() call. The operation is
     // pending because the delay has not yet elapsed.
     let op_id: Bytes = env.as_contract(&governor_id, || {
-        env.storage()
+        let proposal: Proposal = env
+            .storage()
             .persistent()
-            .get(&crate::DataKey::QueuedOpId(proposal_id))
-            .expect("QueuedOpId not stored after queue()")
+            .get(&crate::DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        proposal.op_ids.get(0).unwrap()
     });
 
     // is_pending: scheduled but delay not yet elapsed.

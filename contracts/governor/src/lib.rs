@@ -73,6 +73,10 @@ pub struct Proposal {
     pub executed: bool,
     pub cancelled: bool,
     pub queued: bool,
+    /// Timelock operation ids created during queue().
+    ///
+    /// One op-id per (target, fn_name, calldata) tuple.
+    pub op_ids: Vec<Bytes>,
 }
 
 /// Placeholder type for future storage migration data.
@@ -236,6 +240,7 @@ impl GovernorContract {
             executed: false,
             cancelled: false,
             queued: false,
+            op_ids: Vec::new(&env),
         };
 
         env.storage()
@@ -343,8 +348,7 @@ impl GovernorContract {
     /// target invocation. The returned op-id is stored so `execute()` can
     /// reference it later.
     ///
-    /// TODO issue #6: support multi-action proposals by scheduling all targets.
-    /// Currently only the first target/calldata is queued.
+    /// Schedules every action in the proposal via the Timelock contract.
     pub fn queue(env: Env, proposal_id: u64) {
         assert!(
             Self::state(env.clone(), proposal_id) == ProposalState::Succeeded,
@@ -365,29 +369,35 @@ impl GovernorContract {
         let gov_addr = env.current_contract_address();
         let timelock = TimelockClient::new(&env, &timelock_addr);
 
-        // For now, only queue the first action. Multi-action proposals will be
-        // supported in a future issue.
         assert!(!proposal.targets.is_empty(), "no targets in proposal");
-        let target = proposal.targets.get(0).unwrap();
-        let fn_name = proposal.fn_names.get(0).unwrap();
-        let calldata = proposal.calldatas.get(0).unwrap();
 
         // Use the timelock's own minimum delay to guarantee the configured
         // execution window is respected.
         let delay = timelock.min_delay();
 
-        let op_id = timelock.schedule(&gov_addr, &target, &calldata, &fn_name, &delay);
+        let ready_at = env.ledger().timestamp() + delay;
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::QueuedOpId(proposal_id), &op_id);
+        // Schedule every action in the proposal (multi-action proposals).
+        let mut op_ids: Vec<Bytes> = Vec::new(&env);
+        for i in 0..proposal.targets.len() {
+            let target = proposal.targets.get(i).unwrap();
+            let fn_name = proposal.fn_names.get(i).unwrap();
+            let calldata = proposal.calldatas.get(i).unwrap();
+            let op_id = timelock.schedule(&gov_addr, &target, &calldata, &fn_name, &delay);
+            op_ids.push_back(op_id);
+        }
 
+        proposal.op_ids = op_ids;
         proposal.queued = true;
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
 
-        env.events().publish((symbol_short!("queue"),), proposal_id);
+        // Emit ProposalQueued event with the timelock ETA (`ready_at`).
+        env.events().publish(
+            (Symbol::new(&env, "ProposalQueued"),),
+            (proposal_id, ready_at),
+        );
     }
 
     /// Execute a queued proposal.
@@ -414,14 +424,18 @@ impl GovernorContract {
             .get(&DataKey::Timelock)
             .expect("timelock not set");
         let gov_addr = env.current_contract_address();
-        let op_id: Bytes = env
-            .storage()
-            .persistent()
-            .get(&DataKey::QueuedOpId(proposal_id))
-            .expect("no op id — call queue() first");
 
-        // The timelock will verify if the operation is ready (delay passed).
-        TimelockClient::new(&env, &timelock_addr).execute(&gov_addr, &op_id);
+        // Execute all timelock operations scheduled by queue().
+        assert!(
+            !proposal.op_ids.is_empty(),
+            "no op ids — call queue() first"
+        );
+
+        for i in 0..proposal.op_ids.len() {
+            let op_id = proposal.op_ids.get(i).unwrap();
+            // The timelock will verify if the operation is ready (delay passed).
+            TimelockClient::new(&env, &timelock_addr).execute(&gov_addr, &op_id);
+        }
 
         proposal.executed = true;
         env.storage()

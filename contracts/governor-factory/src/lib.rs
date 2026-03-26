@@ -147,7 +147,11 @@ impl GovernorFactoryContract {
         TokenVotesClient::new(&env, &token_votes_addr).initialize(&deployer, &token);
 
         // 2. Initialize Timelock with the Governor address
-        TimelockClient::new(&env, &timelock_addr).initialize(&deployer, &governor_addr, &timelock_delay);
+        TimelockClient::new(&env, &timelock_addr).initialize(
+            &deployer,
+            &governor_addr,
+            &timelock_delay,
+        );
 
         // 3. Initialize Governor with Token-Votes and Timelock addresses
         GovernorClient::new(&env, &governor_addr).initialize(

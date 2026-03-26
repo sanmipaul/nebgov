@@ -1318,6 +1318,18 @@
                     },
                     {
                       "key": {
+                        "symbol": "op_ids"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "bytes": "f85aea7baaf5c51e6d58305b0d418d354f42e304b395158cda980c6fc7747f06"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "proposer"
                       },
                       "val": {
@@ -1392,51 +1404,6 @@
             "ext": "v0"
           },
           4095
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "QueuedOpId"
-                },
-                {
-                  "u64": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "QueuedOpId"
-                    },
-                    {
-                      "u64": 1
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "bytes": "f85aea7baaf5c51e6d58305b0d418d354f42e304b395158cda980c6fc7747f06"
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4126
         ]
       ],
       [
