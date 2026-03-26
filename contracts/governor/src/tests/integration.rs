@@ -15,7 +15,7 @@
 //!   8. Call `execute()` and verify the mock target function was invoked
 //!   9. Verify final governor state is Executed
 
-use crate::{GovernorContract, GovernorContractClient, ProposalState, VoteSupport};
+use crate::{GovernorContract, GovernorContractClient, Proposal, ProposalState, VoteSupport};
 
 use soroban_sdk::{
     contract, contractimpl,
@@ -105,10 +105,10 @@ fn test_full_proposal_lifecycle() {
         &admin,
         &votes_id,
         &timelock_id,
-        &10_u32,  // voting_delay
-        &20_u32,  // voting_period
-        &0_u32,   // quorum_numerator (set to 0 for this simple majority test)
-        &0_i128,  // proposal_threshold
+        &10_u32, // voting_delay
+        &20_u32, // voting_period
+        &0_u32,  // quorum_numerator (set to 0 for this simple majority test)
+        &0_i128, // proposal_threshold
     );
 
     // ------------------------------------------------------------------
@@ -172,14 +172,13 @@ fn test_full_proposal_lifecycle() {
         "expected Active during voting window"
     );
 
-    // Both Alice and Bob vote For. The governor currently counts each vote
-    // as weight=1 (TODO issue #3 will wire in token-votes); two For votes
-    // satisfy the simple majority check.
+    // Both Alice and Bob vote For. cast_vote() now reads snapshot voting
+    // power from token-votes; Alice has 500 and Bob has 500, totalling 1000.
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_id, &VoteSupport::For);
 
     let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
-    assert_eq!(votes_for, 2, "both voters should have cast For votes");
+    assert_eq!(votes_for, 1000, "votes should reflect token-weighted power (500 + 500)");
     assert_eq!(votes_against, 0);
     assert_eq!(votes_abstain, 0);
 
@@ -215,10 +214,13 @@ fn test_full_proposal_lifecycle() {
     // Confirm the timelock received the schedule() call. The operation is
     // pending because the delay has not yet elapsed.
     let op_id: Bytes = env.as_contract(&governor_id, || {
-        env.storage()
+        let proposal: Proposal = env
+            .storage()
             .persistent()
-            .get(&crate::DataKey::QueuedOpId(proposal_id))
-            .expect("QueuedOpId not stored after queue()")
+            .get(&crate::DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        proposal.op_ids.get(0).unwrap()
     });
 
     // is_pending: scheduled but delay not yet elapsed.

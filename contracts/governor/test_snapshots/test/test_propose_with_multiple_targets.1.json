@@ -219,6 +219,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "op_ids"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "proposer"
                       },
                       "val": {

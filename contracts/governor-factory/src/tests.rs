@@ -1,8 +1,5 @@
 use super::*;
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, BytesN, Env,
-};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
 use sorogov_governor::GovernorContract;
 use sorogov_timelock::TimelockContract;
@@ -11,15 +8,11 @@ use sorogov_token_votes::TokenVotesContract;
 // Import the WASM binaries for the contracts we want to deploy.
 // These are built via `stellar contract build`
 mod wasm {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_governor.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_governor.wasm");
 }
 
 mod timelock_wasm {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../../target/wasm32v1-none/release/sorogov_timelock.wasm");
 }
 
 mod token_votes_wasm {
@@ -71,7 +64,7 @@ fn test_deploy_full_stack() {
 
     let admin = Address::generate(&env);
     let deployer = Address::generate(&env);
-    let token = Address::generate(&env);  // underlying SEP-41 token placeholder
+    let token = Address::generate(&env); // underlying SEP-41 token placeholder
 
     let factory_id = env.register(GovernorFactoryContract, ());
     let factory = GovernorFactoryContractClient::new(&env, &factory_id);
@@ -81,13 +74,11 @@ fn test_deploy_full_stack() {
 
     // Deploy a governance stack
     let id = factory.deploy(
-        &deployer,
-        &token,
-        &100u32,    // voting_delay
-        &1000u32,   // voting_period
-        &50u32,     // quorum_numerator
-        &1000i128,  // proposal_threshold
-        &3600u64,   // timelock_delay
+        &deployer, &token, &100u32,   // voting_delay
+        &1000u32,  // voting_period
+        &50u32,    // quorum_numerator
+        &1000i128, // proposal_threshold
+        &3600u64,  // timelock_delay
     );
 
     assert_eq!(id, 1);
@@ -107,21 +98,18 @@ fn test_deploy_full_stack() {
     assert_ne!(entry.timelock, entry.token);
 
     // --- Cross-check initialisation via the sibling contract clients ---
-    let timelock_client =
-        sorogov_timelock::TimelockContractClient::new(&env, &entry.timelock);
+    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &entry.timelock);
     // Governor is correctly wired as the timelock's governor
     assert_eq!(timelock_client.governor(), entry.governor);
     // min_delay was set to the value we passed in
     assert_eq!(timelock_client.min_delay(), 3600u64);
 
-    let governor_client =
-        sorogov_governor::GovernorContractClient::new(&env, &entry.governor);
+    let governor_client = sorogov_governor::GovernorContractClient::new(&env, &entry.governor);
     assert_eq!(governor_client.voting_delay(), 100u32);
     assert_eq!(governor_client.voting_period(), 1000u32);
     assert_eq!(governor_client.proposal_threshold(), 1000i128);
 
-    let votes_client =
-        sorogov_token_votes::TokenVotesContractClient::new(&env, &entry.token);
+    let votes_client = sorogov_token_votes::TokenVotesContractClient::new(&env, &entry.token);
     // token-votes was initialised with the caller-supplied SEP-41 token address
     assert_eq!(votes_client.token(), token);
 }
@@ -147,8 +135,12 @@ fn test_second_deploy_has_different_addresses() {
     let factory = GovernorFactoryContractClient::new(&env, &factory_id);
     factory.initialize(&admin, &governor_hash, &timelock_hash, &token_votes_hash);
 
-    let id1 = factory.deploy(&deployer, &token, &100u32, &1000u32, &50u32, &0i128, &86400u64);
-    let id2 = factory.deploy(&deployer, &token, &200u32, &2000u32, &40u32, &0i128, &43200u64);
+    let id1 = factory.deploy(
+        &deployer, &token, &100u32, &1000u32, &50u32, &0i128, &86400u64,
+    );
+    let id2 = factory.deploy(
+        &deployer, &token, &200u32, &2000u32, &40u32, &0i128, &43200u64,
+    );
 
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
