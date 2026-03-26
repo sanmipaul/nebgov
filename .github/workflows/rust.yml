@@ -42,6 +42,20 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate coverage
+        run: cargo tarpaulin --workspace --out xml --output-dir coverage/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/cobertura.xml
+          flags: rust
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
   build:
     name: Build WASM
     runs-on: ubuntu-latest

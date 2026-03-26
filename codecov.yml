@@ -1,0 +1,19 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 70%
+        threshold: 5%
+    patch:
+      default:
+        target: 80%
+
+flags:
+  rust:
+    paths:
+      - contracts/
+    carryforward: true
+  typescript:
+    paths:
+      - sdk/
+    carryforward: true

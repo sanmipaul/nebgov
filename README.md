@@ -6,6 +6,7 @@ NebGov is the canonical governance framework for the Stellar ecosystem — a mod
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/nebgov/nebgov/actions/workflows/rust.yml/badge.svg)](https://github.com/nebgov/nebgov/actions)
+[![codecov](https://codecov.io/gh/nebgov/nebgov/graph/badge.svg)](https://codecov.io/gh/nebgov/nebgov)
 
 ---
 
