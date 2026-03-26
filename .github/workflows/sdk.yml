@@ -29,8 +29,16 @@ jobs:
       - name: Build SDK
         run: pnpm build:sdk
 
-      - name: Test SDK
-        run: pnpm test:sdk
+      - name: Test SDK with coverage
+        run: pnpm test:sdk -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: sdk/coverage/lcov.info
+          flags: typescript
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   app:
     name: App Build
