@@ -55,6 +55,42 @@ pnpm test:app
 cd app && npx playwright test
 ```
 
+## Security Scanning
+
+We use [CoinFabrik Scout](https://github.com/CoinFabrik/scout) to automatically scan our Soroban contracts for security vulnerabilities.
+
+### Local Usage
+
+To run Scout locally, you first need to install the `scout-audit` tool:
+
+```bash
+cargo install cargo-scout-audit
+```
+
+Then, run the scanner from the repository root:
+
+```bash
+cargo scout-audit --output-format html
+```
+
+This will generate an `audit_report.html` file with the results.
+
+### Interpreting Results
+
+- **Critical/High**: These findings will fail the CI build and **must** be addressed before merging.
+- **Medium/Low/Info**: These findings do not fail the CI but should be reviewed and fixed if applicable.
+
+### Suppressing False Positives
+
+If a finding is confirmed as a false positive, it can be suppressed in `.scout.toml` at the repository root. Each suppression must include a justification:
+
+```toml
+[[suppressions]]
+detector = "detector_name"
+reason = "Suppressed: [reason] — [date] — [author]"
+```
+
+
 ## Project Structure
 
 | Directory | Description |
