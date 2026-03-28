@@ -82,3 +82,16 @@ export interface TreasuryTx {
   executed: boolean;
   cancelled: boolean;
 }
+
+export interface ProposalAction {
+  target: string;
+  function: string;
+  args: any[];
+}
+
+export interface ProposalSimulationResult {
+  success: boolean;
+  computeUnits?: number;
+  stateChanges?: any[];
+  error?: string;
+}

@@ -18,6 +18,8 @@ import {
   VoteSupport,
   Network,
   UnknownProposalStateError,
+  ProposalAction,
+  ProposalSimulationResult,
 } from "./types";
 
 const RPC_URLS: Record<Network, string> = {
@@ -64,6 +66,84 @@ export class GovernorClient {
     this.server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
     this.contract = new Contract(config.governorAddress);
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
+  }
+
+  /**
+   * Simulate a proposal's execution against forked state before submission.
+   *
+   * @param actions Array of proposal actions to simulate
+   * @returns Simulation result with success status, compute units, state changes, or error
+   */
+  async simulateProposal(actions: ProposalAction[]): Promise<ProposalSimulationResult> {
+    try {
+      // Create a mock proposer address for simulation
+      const mockProposer = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+      
+      // Build simulation transaction for each action
+      const results = [];
+      let totalComputeUnits = 0;
+      
+      for (const action of actions) {
+        const account = await this.server.getAccount(mockProposer);
+        
+        // Create a direct simulation of the target contract call
+        const targetContract = new Contract(action.target);
+        
+        // Convert args to ScVal format
+        const scArgs = action.args.map(arg => nativeToScVal(arg));
+        
+        const tx = new TransactionBuilder(account, {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(
+            targetContract.call(action.function, ...scArgs)
+          )
+          .setTimeout(30)
+          .build();
+
+        const result = await this.server.simulateTransaction(tx);
+        
+        if (SorobanRpc.Api.isSimulationError(result)) {
+          return {
+            success: false,
+            error: `Simulation failed: ${result.error}`
+          };
+        }
+
+        const successResult = result as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+        
+        if (!successResult.result) {
+          return {
+            success: false,
+            error: "No simulation result returned"
+          };
+        }
+
+        // Extract compute units from the simulation result
+        const computeUnits = (successResult.result as any)?.cost?.cpuInstructions || 0;
+        totalComputeUnits += computeUnits;
+        
+        // Extract state changes if available  
+        const stateChanges = (successResult.result as any)?.footprint || [];
+        results.push({
+          action,
+          computeUnits,
+          stateChanges
+        });
+      }
+
+      return {
+        success: true,
+        computeUnits: totalComputeUnits,
+        stateChanges: results.flatMap(r => r.stateChanges)
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown simulation error"
+      };
+    }
   }
 
   /**
