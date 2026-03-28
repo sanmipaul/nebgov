@@ -15,11 +15,13 @@ import {
   Users,
   BarChart3,
   Wallet2,
+  Bell,
 } from "lucide-react";
 import toast from "react-hot-toast";
 
 const NAV_LINKS = [
   { name: "Proposals", href: "/", icon: LayoutDashboard },
+  { name: "Notifications", href: "/notifications", icon: Bell },
   { name: "Delegates", href: "/delegates", icon: Users },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Treasury", href: "/treasury", icon: Wallet2 },

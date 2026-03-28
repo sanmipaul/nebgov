@@ -246,6 +246,47 @@ export class GovernorClient {
     return { votesFor, votesAgainst, votesAbstain };
   }
 
+  /** Current Soroban ledger sequence from the RPC backing this client. */
+  async getLatestLedger(): Promise<number> {
+    const info = await this.server.getLatestLedger();
+    return info.sequence;
+  }
+
+  /**
+   * Poll `getProposalState` until the state changes (compared to the prior poll).
+   *
+   * The first successful poll establishes a baseline and does **not** invoke `onChange`.
+   * Unsubscribe with the returned function to stop polling.
+   */
+  onProposalStateChange(
+    proposalId: bigint,
+    onChange: (newState: ProposalState) => void,
+    pollIntervalMs: number = 10_000
+  ): () => void {
+    let stopped = false;
+    let previous: ProposalState | undefined;
+
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const state = await this.getProposalState(proposalId);
+        if (previous !== undefined && state !== previous) {
+          onChange(state);
+        }
+        previous = state;
+      } catch {
+        // Transient RPC errors — retry on next tick
+      }
+    };
+
+    void tick();
+    const handle = setInterval(() => void tick(), pollIntervalMs);
+    return () => {
+      stopped = true;
+      clearInterval(handle);
+    };
+  }
+
   /**
    * Get total number of proposals.
    */

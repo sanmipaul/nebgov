@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { NavBar } from "../components/NavBar";
+import { GovernorNotificationsProvider } from "../components/GovernorNotificationsProvider";
 import { WalletProvider } from "../lib/wallet-context";
 import { Toaster } from "react-hot-toast";
 
@@ -22,9 +23,11 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.className} bg-gray-50 min-h-screen`}>
         <WalletProvider>
-          <Toaster position="bottom-right" />
-          <NavBar />
-          <main className="pt-16">{children}</main>
+          <GovernorNotificationsProvider>
+            <Toaster position="bottom-right" />
+            <NavBar />
+            <main className="pt-16">{children}</main>
+          </GovernorNotificationsProvider>
         </WalletProvider>
       </body>
     </html>

@@ -83,6 +83,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             const { address: rawAddress } = await kit.getAddress();
             setAddress(truncateAddress(rawAddress));
             setPublicKey(rawAddress);
+            if (typeof window !== "undefined" && "Notification" in window) {
+              void Notification.requestPermission();
+            }
           } catch (err) {
             const msg =
               err instanceof Error ? err.message : "Failed to get address";
