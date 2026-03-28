@@ -3,6 +3,7 @@ use soroban_sdk::{
     contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env,
     String, Symbol,
 };
+use sorogov_timelock::TimelockError;
 
 /// Mock votes contract that returns a high vote count for any address,
 /// allowing propose() to pass the threshold check in tests.
@@ -243,11 +244,11 @@ fn test_proposal_execution_lifecycle() {
     client.cast_vote(&voter2, &proposal_id, &VoteSupport::For);
     env.ledger().set_sequence_number(222); // Past end_ledger (221)
 
-    assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
-    client.queue(&proposal_id);
+     assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
+     client.queue(&proposal_id);
 
-    client.execute(&proposal_id);
-    assert_eq!(client.state(&proposal_id), ProposalState::Executed);
+     client.execute(&proposal_id);
+     assert_eq!(client.state(&proposal_id), ProposalState::Executed);
 }
 
 #[test]

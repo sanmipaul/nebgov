@@ -261,9 +261,9 @@ fn test_full_proposal_lifecycle() {
     // 8. Execute the proposal; verify the mock target function was called.
     // ------------------------------------------------------------------
 
-    governor_client.execute(&proposal_id);
+     governor_client.execute(&proposal_id);
 
-    // The timelock invoked MockTarget::exec_gov during the execute() flow.
+     // The timelock invoked MockTarget::exec_gov during the execute() flow.
     assert!(
         mock_client.was_called(),
         "MockTarget::exec_gov should have been called by the timelock"

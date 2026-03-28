@@ -144,6 +144,7 @@
         }
       ]
     ],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
@@ -356,7 +357,7 @@
                       "val": {
                         "vec": [
                           {
-                            "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                            "bytes": "cb7c8235401129f9d1341762ee412d47c8b2ae3f9e6db9d0bbeec4582af40ef6"
                           }
                         ]
                       }
@@ -426,7 +427,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 1
+                          "lo": 1000000
                         }
                       }
                     }
@@ -437,51 +438,6 @@
             "ext": "v0"
           },
           4095
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "QueuedOpId"
-                },
-                {
-                  "u64": 1
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "QueuedOpId"
-                    },
-                    {
-                      "u64": 1
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          4206
         ]
       ],
       [
@@ -823,7 +779,7 @@
                   "symbol": "Operation"
                 },
                 {
-                  "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  "bytes": "cb7c8235401129f9d1341762ee412d47c8b2ae3f9e6db9d0bbeec4582af40ef6"
                 }
               ]
             },
@@ -843,7 +799,7 @@
                       "symbol": "Operation"
                     },
                     {
-                      "bytes": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                      "bytes": "cb7c8235401129f9d1341762ee412d47c8b2ae3f9e6db9d0bbeec4582af40ef6"
                     }
                   ]
                 },
@@ -880,6 +836,14 @@
                       },
                       "val": {
                         "symbol": "exec"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "predecessor"
+                      },
+                      "val": {
+                        "bytes": ""
                       }
                     },
                     {
@@ -967,6 +931,38 @@
                         }
                       }
                     ]
+                  }
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4206
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON",
+            "key": "ledger_key_contract_instance",
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON",
+                "key": "ledger_key_contract_instance",
+                "durability": "persistent",
+                "val": {
+                  "contract_instance": {
+                    "executable": {
+                      "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    },
+                    "storage": null
                   }
                 }
               }

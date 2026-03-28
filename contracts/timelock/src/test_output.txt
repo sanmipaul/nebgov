@@ -1,0 +1,146 @@
+warning: unused import: `contractclient`
+ --> contracts/timelock/src/test.rs:3:15
+  |
+3 | ...t, contractclient, c...
+  |       ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `sorogov-timelock` (lib test) generated 1 warning (run `cargo fix --lib -p sorogov-timelock --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running unittests src/lib.rs (/home/stealth_dev/Documents/PROJECTS/DRIPS PROJECT/task 19-nebgov/nebgov/target/debug/deps/sorogov_timelock-38ee48ea52a9f830)
+
+running 11 tests
+test test::test_compute_op_id ... ok
+
+thread 'test::test_is_done' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(WasmVm, InvalidAction)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:["contract call failed", schedule, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes()]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(WasmVm, InvalidAction)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[log], data:["caught panic 'delay too short' from contract function 'Symbol(schedule)'", CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes()]
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, schedule], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes()]
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Writing test snapshot file for test "
+thread 'test::test_empty_predecessor_and_salt' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(WasmVm, InvalidAction)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:["contract call failed", schedule, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes()]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(WasmVm, InvalidAction)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[log], data:["caught panic 'delay too short' from contract function 'Symbol(schedule)'", CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes()]
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, schedule], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes()]
+
+test::test_is_done" to "test_snapshots/test/test_is_done.1.json".
+Writing test snapshot file for test "test::test_empty_predecessor_and_salt" to "test_snapshots/test/test_empty_predecessor_and_salt.1.json".
+test test::test_is_done ... FAILED
+Writing test snapshot file for test "test::test_no_predecessor_executes" to "test_snapshots/test/test_no_predecessor_executes.1.json".
+test test::test_empty_predecessor_and_salt ... FAILED
+
+thread 'test::test_predecessor_changes_id' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(Contract, #2)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #2)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #2)], data:["contract call failed", schedule, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(7072656431), Bytes(73616d655f73616c74)]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #2)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #2)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #2)], data:["failing with contract error", 2]
+   5: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, schedule], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(7072656431), Bytes(73616d655f73616c74)]
+
+Writing test snapshot file for test "test::test_predecessor_changes_id" to "test_snapshots/test/test_predecessor_changes_id.1.json".
+test test::test_predecessor_changes_id ... FAILED
+
+thread 'test::test_salt_uniqueness' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(WasmVm, InvalidAction)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:["contract call failed", schedule, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(), Bytes(73616c7431)]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(WasmVm, InvalidAction)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[log], data:["caught panic 'delay too short' from contract function 'Symbol(schedule)'", CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(), Bytes(73616c7431)]
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, schedule], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(), Bytes(73616c7431)]
+
+Writing test snapshot file for test "test::test_salt_uniqueness" to "test_snapshots/test/test_salt_uniqueness.1.json".
+test test::test_no_predecessor_executes ... ok
+test test::test_salt_uniqueness ... FAILED
+
+thread 'test::test_predecessor_blocking_when_ready' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:["contract call failed", execute, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, Bytes(aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1)]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:["contract call failed", exec, []]
+   5: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   6: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, exec], data:Void
+   7: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, execute], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, Bytes(aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1)]
+
+Writing test snapshot file for test "test::test_predecessor_blocking_when_ready" to "test_snapshots/test/test_predecessor_blocking_when_ready.1.json".
+Writing test snapshot file for test "test::test_schedule_validates_predecessor" to "test_snapshots/test/test_schedule_validates_predecessor.1.json".
+test test::test_schedule_validates_predecessor ... ok
+
+thread 'test::test_same_salt_same_id' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(WasmVm, InvalidAction)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:["contract call failed", schedule, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(), Bytes(73616d655f73616c74)]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(WasmVm, InvalidAction)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[log], data:["caught panic 'delay too short' from contract function 'Symbol(schedule)'", CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(), Bytes(73616d655f73616c74)]
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, schedule], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(73616d652064617461), exec, 1000, Bytes(), Bytes(73616d655f73616c74)]
+
+Writing test snapshot file for test "test::test_same_salt_same_id" to "test_snapshots/test/test_same_salt_same_id.1.json".
+test test::test_same_salt_same_id ... FAILED
+
+thread 'test::test_schedule_with_predecessor_and_salt' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(WasmVm, InvalidAction)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(WasmVm, InvalidAction)], data:["contract call failed", schedule, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes(756e697175655f73616c74)]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(WasmVm, InvalidAction)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[log], data:["caught panic 'delay too short' from contract function 'Symbol(schedule)'", CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes(756e697175655f73616c74)]
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, schedule], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, Bytes(63616c6c64617461), exec, 1000, Bytes(), Bytes(756e697175655f73616c74)]
+
+Writing test snapshot file for test "test::test_schedule_with_predecessor_and_salt" to "test_snapshots/test/test_schedule_with_predecessor_and_salt.1.json".
+test test::test_schedule_with_predecessor_and_salt ... FAILED
+
+thread 'test::test_predecessor_enforcement' panicked at /home/stealth_dev/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-22.1.3/src/host.rs:847:9:
+HostError: Error(Storage, MissingValue)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Storage, MissingValue)], data:["contract call failed", execute, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, Bytes(aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1)]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:["contract call failed", exec, []]
+   5: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Storage, MissingValue)], data:"trying to get non-existing value for contract instance"
+   6: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4, exec], data:Void
+   7: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, execute], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M, Bytes(aab81953d4282686ed557d4257f771d70da4a031b980a403341df2a947ef7be1)]
+
+Writing test snapshot file for test "test::test_predecessor_enforcement" to "test_snapshots/test/test_predecessor_enforcement.1.json".
+test test::test_predecessor_enforcement ... FAILED
+test test::test_predecessor_blocking_when_ready ... FAILED
+
+failures:
+
+failures:
+    test::test_empty_predecessor_and_salt
+    test::test_is_done
+    test::test_predecessor_blocking_when_ready
+    test::test_predecessor_changes_id
+    test::test_predecessor_enforcement
+    test::test_salt_uniqueness
+    test::test_same_salt_same_id
+    test::test_schedule_with_predecessor_and_salt
+
+test result: FAILED. 3 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+error: test failed, to rerun pass `-p sorogov-timelock --lib`

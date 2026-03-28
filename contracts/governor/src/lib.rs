@@ -4,6 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
     Env, String, Symbol, Vec,
 };
+// Removed unused TimelockError import
 
 /// Cross-contract interface for the Timelock contract.
 ///
@@ -18,9 +19,12 @@ pub trait TimelockTrait {
         data: Bytes,
         fn_name: Symbol,
         delay: u64,
+        predecessor: Bytes,
+        salt: Bytes,
     ) -> Bytes;
     fn execute(env: Env, caller: Address, op_id: Bytes);
     fn min_delay(env: Env) -> u64;
+    fn is_done(env: Env, op_id: Bytes) -> bool;
 }
 
 /// Cross-contract interface for the TokenVotes contract.
@@ -379,11 +383,12 @@ impl GovernorContract {
 
         // Schedule every action in the proposal (multi-action proposals).
         let mut op_ids: Vec<Bytes> = Vec::new(&env);
+        let empty_bytes = Bytes::new(&env);
         for i in 0..proposal.targets.len() {
             let target = proposal.targets.get(i).unwrap();
             let fn_name = proposal.fn_names.get(i).unwrap();
             let calldata = proposal.calldatas.get(i).unwrap();
-            let op_id = timelock.schedule(&gov_addr, &target, &calldata, &fn_name, &delay);
+            let op_id = timelock.schedule(&gov_addr, &target, &calldata, &fn_name, &delay, &empty_bytes, &empty_bytes);
             op_ids.push_back(op_id);
         }
 
@@ -431,10 +436,11 @@ impl GovernorContract {
             "no op ids — call queue() first"
         );
 
+        let timelock = TimelockClient::new(&env, &timelock_addr);
         for i in 0..proposal.op_ids.len() {
             let op_id = proposal.op_ids.get(i).unwrap();
             // The timelock will verify if the operation is ready (delay passed).
-            TimelockClient::new(&env, &timelock_addr).execute(&gov_addr, &op_id);
+            timelock.execute(&gov_addr, &op_id);
         }
 
         proposal.executed = true;
