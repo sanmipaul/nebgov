@@ -128,8 +128,51 @@ export function DelegateModal({ open, onClose, onDelegated, prefillAddress }: Pr
               {submitting ? "Delegating..." : "Delegate"}
             </button>
           </div>
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <p className="text-xs text-gray-500 mb-2">Or delegate without paying gas</p>
+            <button
+              type="button"
+              onClick={handleDelegateBySig}
+              disabled={submitting || !delegatee.trim()}
+              className="w-full bg-green-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+            >
+              {submitting ? "Signing..." : "Delegate without paying gas"}
+            </button>
+            <p className="text-xs text-gray-400 mt-1">
+              Sign off-chain, relayer submits transaction
+            </p>
+          </div>
         </form>
       </div>
     </div>
   );
 }
+
+  async function handleDelegateBySig(e: React.FormEvent) {
+    e.preventDefault();
+    if (!delegatee.trim()) return;
+    setSubmitting(true);
+    try {
+      if (!isConnected || !publicKey) {
+        throw new Error("Connect your wallet first.");
+      }
+
+      const client = getVotesClientFromEnv();
+      const signer = getDelegateSigner();
+      
+      // Get current nonce for the owner
+      const nonce = 0n; // TODO: Query current nonce from contract
+      const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600); // 1 hour expiry
+      
+      // Sign the delegation message off-chain
+      const signature = client.signDelegation(signer, delegatee.trim(), nonce, expiry);
+      
+      // Submit the signed delegation (relayer pays gas)
+      await client.delegateBySig(publicKey, delegatee.trim(), nonce, expiry, signature);
+
+      onDelegated?.();
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  }
