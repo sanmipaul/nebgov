@@ -89,10 +89,10 @@ if [[ "$NETWORK" == "testnet" ]]; then
 fi
 
 # ---- Build WASM contracts -------------------------------------------
-WASM_DIR="$ROOT_DIR/target/wasm32-unknown-unknown/release"
+WASM_DIR="$ROOT_DIR/target/wasm32v1-none/release"
 
 info "Building WASM contracts (release) ..."
-cargo build --release --target wasm32-unknown-unknown --manifest-path "$ROOT_DIR/Cargo.toml" --workspace
+cargo build --release --target wasm32v1-none --manifest-path "$ROOT_DIR/Cargo.toml" --workspace
 ok "WASM build complete"
 
 # Verify expected artefacts exist
