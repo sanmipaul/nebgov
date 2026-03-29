@@ -5,6 +5,7 @@ members = [
     "contracts/token-votes",
     "contracts/governor-factory",
     "contracts/treasury",
+    "contracts/token-votes-wrapper",
 ]
 resolver = "2"
 

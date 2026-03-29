@@ -15,6 +15,8 @@
 export { GovernorClient } from "./governor";
 export { VotesClient } from "./votes";
 export { TimelockClient } from "./timelock";
+export { WrapperClient } from "./wrapper";
+export type { WrapperConfig } from "./wrapper";
 export {
   subscribeToProposals,
   subscribeToVotes,
