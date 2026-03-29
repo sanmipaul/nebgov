@@ -108,13 +108,5 @@ jobs:
         with:
           working_directory: .
           fail_on_error: false
-          scout_extra_args: "--output-format sarif --output-path scout-results.sarif"
-
-      # SARIF artifact must be uploaded even if Scout fails
-      - name: Upload Scout SARIF report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: scout-sarif-report
-          path: scout-results.sarif
+          scout_extra_args: "--output-format sarif"
 
