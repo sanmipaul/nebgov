@@ -32,7 +32,7 @@ pub trait TokenVotesTrait {
 
 #[contractclient(name = "TimelockClient")]
 pub trait TimelockTrait {
-    fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64);
+    fn initialize(env: Env, admin: Address, governor: Address, min_delay: u64, execution_window: u64);
 }
 
 #[contractclient(name = "GovernorClient")]
@@ -46,6 +46,9 @@ pub trait GovernorTrait {
         voting_period: u32,
         quorum_numerator: u32,
         proposal_threshold: i128,
+        guardian: Address,
+        vote_type: soroban_sdk::Symbol,
+        proposal_grace_period: u32,
     );
 }
 
@@ -89,6 +92,9 @@ impl GovernorFactoryContract {
         quorum_numerator: u32,
         proposal_threshold: i128,
         timelock_delay: u64,
+        guardian: Address,
+        vote_type: u32, // 0=Simple, 1=Extended, 2=Quadratic
+        proposal_grace_period: u32,
     ) -> u64 {
         deployer.require_auth();
 
@@ -151,9 +157,18 @@ impl GovernorFactoryContract {
             &deployer,
             &governor_addr,
             &timelock_delay,
+            &1_209_600u64, // Default execution window (14 days)
         );
 
         // 3. Initialize Governor with Token-Votes and Timelock addresses
+        // Convert vote_type u32 to VoteType enum
+        let vote_type_symbol = match vote_type {
+            0 => symbol_short!("Simple"),
+            1 => symbol_short!("Extended"),
+            2 => symbol_short!("Quadratic"),
+            _ => symbol_short!("Extended"), // Default to Extended
+        };
+        
         GovernorClient::new(&env, &governor_addr).initialize(
             &deployer,
             &token_votes_addr,
@@ -162,6 +177,9 @@ impl GovernorFactoryContract {
             &voting_period,
             &quorum_numerator,
             &proposal_threshold,
+            &guardian,
+            &vote_type_symbol,
+            &proposal_grace_period,
         );
 
         let entry = GovernorEntry {
