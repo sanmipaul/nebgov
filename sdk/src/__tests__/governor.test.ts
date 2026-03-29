@@ -60,7 +60,7 @@ describe("GovernorClient", () => {
     mockGetAccount.mockResolvedValue(new Account(validGAddr, "1"));
     mockIsSimulationError.mockReturnValue(false);
     mockNativeToScVal.mockReturnValue({} as xdr.ScVal);
-    
+
     client = new GovernorClient({
       governorAddress: validCAddr,
       timelockAddress: validCAddr,
@@ -88,7 +88,7 @@ describe("GovernorClient", () => {
       mockScValToNative.mockReturnValue([name]);
 
       const state = await client.getProposalState(1n);
-      
+
       expect(state).toBe(expected);
       expect(mockScValToNative).toHaveBeenCalledWith(scv);
     });
@@ -155,6 +155,8 @@ describe("GovernorClient", () => {
       const id = await client.propose(
         mockKeypair,
         "Test proposal",
+        "3665313936616466316231366230623362346231613963316131613262336334",
+        "ipfs://QmTest",
         [validCAddr],
         ["upgrade"],
         [Buffer.from([1, 2, 3])]
@@ -174,6 +176,8 @@ describe("GovernorClient", () => {
         client.propose(
           mockKeypair,
           "Test proposal",
+          "3665313936616466316231366230623362346231613963316131613262336334",
+          "ipfs://QmTest",
           [validCAddr],
           ["upgrade"],
           [Buffer.from([1, 2, 3])]
@@ -190,6 +194,8 @@ describe("GovernorClient", () => {
         client.propose(
           mockKeypair,
           "Test proposal",
+          "3665313936616466316231366230623362346231613963316131613262336334",
+          "ipfs://QmTest",
           [validCAddr],
           ["upgrade"],
           [Buffer.from([1, 2, 3])]
@@ -199,7 +205,7 @@ describe("GovernorClient", () => {
 
     it("throws error when transaction times out", async () => {
       jest.useFakeTimers();
-      
+
       mockGetTransaction.mockResolvedValue({
         status: "NOT_FOUND",
       });
@@ -207,6 +213,8 @@ describe("GovernorClient", () => {
       const promise = client.propose(
         mockKeypair,
         "Test proposal",
+        "3665313936616466316231366230623362346231613963316131613262336334",
+        "ipfs://QmTest",
         [validCAddr],
         ["upgrade"],
         [Buffer.from([1, 2, 3])]
@@ -220,7 +228,7 @@ describe("GovernorClient", () => {
       const error = await promise;
       expect(error).toBeInstanceOf(Error);
       expect(error.message).toContain("Transaction not confirmed after 10 retries");
-      
+
       jest.useRealTimers();
     });
   });

@@ -60,6 +60,8 @@ describeIfTestnet("SDK integration tests (testnet)", () => {
       proposalId = await governor.propose(
         signer,
         "Integration test proposal",
+        "3665313936616466316231366230623362346231613963316131613262336334",
+        "ipfs://QmTest",
         [config.timelockAddress],
         ["noop"],
         [Buffer.from("integration-test")],
