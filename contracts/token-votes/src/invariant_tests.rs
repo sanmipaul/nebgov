@@ -7,11 +7,11 @@ extern crate std;
 
 #[cfg(test)]
 mod invariant_tests {
-    use super::*;
+    use crate::{Checkpoint, DataKey, TokenVotesContract, TokenVotesContractClient};
     use proptest::prelude::*;
     use soroban_sdk::{
         testutils::{Address as _, Ledger as _},
-        token, Env,
+        token, Address, Env,
     };
 
     /// Setup a token-votes contract with a test token.

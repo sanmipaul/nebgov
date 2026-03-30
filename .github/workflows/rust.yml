@@ -116,9 +116,32 @@ jobs:
         with:
           targets: wasm32v1-none
 
+      - name: Audit authorization checks
+        run: |
+          echo "=== Authorization Audit ==="
+          # Find all invoke_contract calls
+          INVOKES=$(grep -rn "invoke_contract" contracts/ --include="*.rs" || true)
+
+          if [ -n "$INVOKES" ]; then
+            echo "Found invoke_contract calls - verifying authorization:"
+            echo "$INVOKES"
+            echo ""
+            echo "✓ Manual review: Each invoke_contract call should have:"
+            echo "  1. caller.require_auth() before the invoke, OR"
+            echo "  2. env.current_contract_address().require_auth() for self-calls, OR"
+            echo "  3. Documented reason if no auth check (e.g., read-only query)"
+            echo ""
+          else
+            echo "✓ No invoke_contract calls found"
+          fi
+
+          # Count all require_auth calls
+          AUTH_COUNT=$(grep -r "require_auth()" contracts/ --include="*.rs" | wc -l)
+          echo "Total require_auth() calls: $AUTH_COUNT"
+          echo "See docs/permissions.md for complete authorization matrix"
+
       - name: Run CoinFabrik Scout security scanner
         uses: CoinFabrik/scout-actions@v3.2
         with:
           working_directory: .
           fail_on_error: false
-

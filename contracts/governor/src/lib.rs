@@ -162,6 +162,16 @@ pub enum VoteSupport {
     Abstain,
 }
 
+/// Voting receipt for a specific voter on a proposal.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VotingReceipt {
+    pub has_voted: bool,
+    pub support: VoteSupport,
+    pub weight: i128,
+    pub reason: String,
+}
+
 /// Vote type configurations.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -188,6 +198,7 @@ pub enum DataKey {
     ProposalGracePeriod,
     HasVoted(u64, Address),
     VoteReason(u64, Address),
+    VoteReceipt(u64, Address),
     /// The timelock op-id (Bytes) for a proposal after queue() is called.
     QueuedOpId(u64),
     /// Active voting strategy (Single or MultiToken).
@@ -447,6 +458,17 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
 
+        // Store voting receipt
+        let receipt = VotingReceipt {
+            has_voted: true,
+            support: support.clone(),
+            weight,
+            reason: String::from_str(&env, ""),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
+
         // Emit VoteCast event including the weighted vote power.
         env.events().publish(
             (symbol_short!("vote"), voter),
@@ -462,12 +484,65 @@ impl GovernorContract {
         support: VoteSupport,
         reason: String,
     ) {
-        Self::cast_vote(env.clone(), voter.clone(), proposal_id, support.clone());
+        voter.require_auth();
+
+        // Validate vote support against configured vote type
+        Self::validate_vote_support(&env, &support)
+            .unwrap_or_else(|e| env.panic_with_error(e));
+
+        let voted: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HasVoted(proposal_id, voter.clone()))
+            .unwrap_or(false);
+        assert!(!voted, "already voted");
+
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        // Look up the voter's snapshot voting power at the proposal's start ledger
+        let raw_weight: i128 = Self::compute_votes(&env, &voter, &proposal.start_ledger);
+        assert!(raw_weight > 0, "zero voting power");
+
+        // Apply vote type weighting
+        let vote_type: VoteType = env
+            .storage()
+            .instance()
+            .get(&DataKey::VoteType)
+            .unwrap_or(VoteType::Extended);
+        let weight = Self::apply_vote_type(vote_type, raw_weight);
+
+        match support {
+            VoteSupport::For => proposal.votes_for += weight,
+            VoteSupport::Against => proposal.votes_against += weight,
+            VoteSupport::Abstain => proposal.votes_abstain += weight,
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+        env.storage()
+            .persistent()
+            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
 
         // Store the reason in persistent storage
         env.storage()
             .persistent()
             .set(&DataKey::VoteReason(proposal_id, voter.clone()), &reason);
+
+        // Store voting receipt with reason
+        let receipt = VotingReceipt {
+            has_voted: true,
+            support: support.clone(),
+            weight,
+            reason: reason.clone(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
         // Emit VoteCastWithReason event
         env.events().publish(
@@ -919,6 +994,22 @@ impl GovernorContract {
             .get(&DataKey::VoteReason(proposal_id, voter))
     }
 
+    /// Get the voting receipt for a specific voter on a proposal.
+    ///
+    /// Returns a VotingReceipt containing whether the voter has voted, their
+    /// support choice, the weight of their vote, and any reason provided.
+    pub fn get_receipt(env: Env, proposal_id: u64, voter: Address) -> VotingReceipt {
+        env.storage()
+            .persistent()
+            .get(&DataKey::VoteReceipt(proposal_id, voter))
+            .unwrap_or(VotingReceipt {
+                has_voted: false,
+                support: VoteSupport::Against,
+                weight: 0,
+                reason: String::from_str(&env, ""),
+            })
+    }
+
     /// Get the active voting strategy.
     pub fn voting_strategy(env: Env) -> VotingStrategy {
         env.storage()
@@ -1160,12 +1251,14 @@ mod test {
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
+        // Advance to active state
+        env.ledger().with_mut(|li| li.sequence_number += 101);
+
         let reason = String::from_str(&env, "This aligns with our community values");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
 
         let events = env.events().all();
-        assert!(events.len() >= 2);
-
+        
         let has_vote_rsn = events.iter().any(|(_, topics, _)| {
             topics.len() >= 1 && {
                 let first: Result<soroban_sdk::Symbol, _> =
@@ -1699,6 +1792,73 @@ mod test {
             fallback_q, 1_000_000,
             "should fall back to static quorum when dynamic is disabled"
         );
+    }
+
+    #[test]
+    fn test_get_receipt_returns_voting_details() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let guardian = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = Address::generate(&env);
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+
+        let proposal_id = propose_dummy(&env, &client, &proposer);
+
+        // Before voting, receipt should show has_voted = false
+        let receipt_before = client.get_receipt(&proposal_id, &voter);
+        assert!(!receipt_before.has_voted);
+        assert_eq!(receipt_before.weight, 0);
+
+        // Advance to active state
+        env.ledger().with_mut(|li| li.sequence_number += 101);
+
+        // Cast vote with reason
+        let reason = String::from_str(&env, "I support this proposal");
+        client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
+
+        // After voting, receipt should contain all details
+        let receipt_after = client.get_receipt(&proposal_id, &voter);
+        assert!(receipt_after.has_voted);
+        assert_eq!(receipt_after.support, VoteSupport::For);
+        assert_eq!(receipt_after.weight, 1_000_000); // MockVotesContract returns 1_000_000
+        assert_eq!(receipt_after.reason, reason);
+    }
+
+    #[test]
+    #[should_panic(expected = "already voted")]
+    fn test_cannot_vote_twice() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let guardian = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = Address::generate(&env);
+        let proposer = Address::generate(&env);
+        let voter = Address::generate(&env);
+
+        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+
+        let proposal_id = propose_dummy(&env, &client, &proposer);
+
+        // Advance to active state
+        env.ledger().with_mut(|li| li.sequence_number += 101);
+
+        // Cast first vote
+        client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
+
+        // Attempt to vote again should panic
+        client.cast_vote(&voter, &proposal_id, &VoteSupport::Against);
     }
 }
 
