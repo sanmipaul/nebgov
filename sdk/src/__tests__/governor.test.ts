@@ -528,6 +528,51 @@ describe("GovernorClient", () => {
     });
   });
 
+  describe("castVoteWithSign()", () => {
+    const mockTxHash = "abc789";
+    const mockSigner = "GAABC";
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+      mockPrepareTransaction.mockResolvedValue({
+        toXDR: jest.fn().mockReturnValue("unsigned-xdr"),
+      });
+      mockSendTransaction.mockResolvedValue({
+        status: "PENDING",
+        hash: mockTxHash,
+      });
+      mockGetTransaction.mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: {} as xdr.ScVal,
+      });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("successfully casts a vote with sign callback", async () => {
+      const signFn = jest.fn().mockResolvedValue("signed-xdr");
+      const promise = client.castVoteWithSign(mockSigner, 1n, VoteSupport.For, signFn);
+      await jest.advanceTimersByTimeAsync(2000);
+      await promise;
+
+      expect(signFn).toHaveBeenCalledWith("unsigned-xdr");
+      expect(mockSendTransaction).toHaveBeenCalled();
+    });
+
+    it("throws error when transaction fails", async () => {
+      mockSendTransaction.mockResolvedValue({
+        status: "ERROR",
+        error: "Insufficient voting power",
+      });
+
+      await expect(
+        client.castVoteWithSign(mockSigner, 1n, VoteSupport.For, jest.fn().mockResolvedValue("signed-xdr"))
+      ).rejects.toThrow("castVoteWithSign failed");
+    });
+  });
+
   describe("getProposalVotes()", () => {
     it("returns vote breakdown for a proposal", async () => {
       const scv = {} as xdr.ScVal;

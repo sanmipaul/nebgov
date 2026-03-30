@@ -358,6 +358,46 @@ export class GovernorClient {
   }
 
   /**
+   * Same as {@link castVote} but signs with a wallet callback.
+   */
+  async castVoteWithSign(
+    signerPublicKey: string,
+    proposalId: bigint,
+    support: VoteSupport,
+    signUnsignedXdr: (xdr: string) => Promise<string>
+  ): Promise<void> {
+    const account = await this.server.getAccount(signerPublicKey);
+
+    const supportScVal = xdr.ScVal.scvVec([
+      xdr.ScVal.scvSymbol(VoteSupport[support]),
+    ]);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "cast_vote",
+          nativeToScVal(signerPublicKey, { type: "address" }),
+          nativeToScVal(proposalId, { type: "u64" }),
+          supportScVal
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    const signedXdr = await signUnsignedXdr(prepared.toXDR());
+    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const result = await this.server.sendTransaction(signed);
+    if (result.status === "ERROR") {
+      throw new Error(`castVoteWithSign failed: ${JSON.stringify(result)}`);
+    }
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
    * Get the current state of a proposal.
    * TODO issue #17: decode all 7 ProposalState variants.
    */

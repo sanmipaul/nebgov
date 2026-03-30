@@ -52,8 +52,12 @@ export default function ProposalDetailPage({ params }: Props) {
   const [voteModalOpen, setVoteModalOpen] = useState(false);
   const [votingPower, setVotingPower] = useState<bigint>(0n);
   const [delegationLoading, setDelegationLoading] = useState(false);
+  const [isVoting, setIsVoting] = useState(false);
+  const [voteSuccess, setVoteSuccess] = useState(false);
+  const [voteError, setVoteError] = useState<string | null>(null);
+  const [votedSupport, setVotedSupport] = useState<VoteSupport | null>(null);
 
-  const { publicKey, isConnected } = useWallet();
+  const { publicKey, isConnected, signTransaction } = useWallet();
 
   const config = useMemo(() => {
     const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
@@ -152,9 +156,42 @@ export default function ProposalDetailPage({ params }: Props) {
 
   const totalVotes = proposal.votesFor + proposal.votesAgainst + proposal.votesAbstain;
 
-  function handleVote() {
-    if (selectedSupport === null) return;
-    setVoteModalOpen(true);
+  async function handleCastVote() {
+    if (selectedSupport === null || !governorClient || !publicKey || isVoting) return;
+
+    setIsVoting(true);
+    setVoteError(null);
+    setVoteSuccess(false);
+
+    try {
+      await governorClient.castVoteWithSign(
+        publicKey,
+        proposalId,
+        selectedSupport,
+        signTransaction
+      );
+
+      setVoteSuccess(true);
+      setVotedSupport(selectedSupport);
+      setVoted(true);
+      await loadProposal();
+    } catch (err: any) {
+      console.error("Vote submission failed:", err);
+      let message = "An unknown error occurred while casting your vote.";
+
+      const errStr = String(err);
+      if (errStr.includes("already voted") || errStr.includes("Already voted") || errStr.includes("Error(Contract, #1)")) {
+        message = "You have already voted on this proposal.";
+      } else if (errStr.includes("Proposal not active") || errStr.includes("Error(Contract, #2)")) {
+        message = "This proposal is no longer accepting votes.";
+      } else if (errStr.includes("zero voting power") || errStr.includes("Insufficient voting power") || errStr.includes("Error(Contract, #3)")) {
+        message = "You do not have sufficient voting power to vote on this proposal.";
+      }
+
+      setVoteError(message);
+    } finally {
+      setIsVoting(false);
+    }
   }
 
   if (loading) {
@@ -342,37 +379,73 @@ export default function ProposalDetailPage({ params }: Props) {
           <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-4">
             Cast Your Vote
           </h2>
-          <div className="flex flex-col sm:flex-row gap-3 mb-4">
-            {[
-              { label: "For", value: VoteSupport.For },
-              { label: "Against", value: VoteSupport.Against },
-              { label: "Abstain", value: VoteSupport.Abstain },
-            ].map(({ label, value }) => (
+
+          {!isConnected ? (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
+              <p className="text-gray-600 text-sm mb-3">Connect your wallet to participate in governance.</p>
               <button
-                key={label}
-                onClick={() => setSelectedSupport(value)}
-                className={`flex-1 py-3 rounded-lg border-2 font-medium transition-all
-                  ${selectedSupport === value
-                    ? "border-indigo-600 bg-indigo-50 text-indigo-700"
-                    : "border-gray-100 hover:border-gray-200 text-gray-600"}`}
+                onClick={() => useWallet().connect()}
+                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
               >
-                {label}
+                Connect Wallet to Vote
               </button>
-            ))}
-          </div>
-          <button
-            onClick={handleVote}
-            disabled={selectedSupport === null || !isConnected}
-            className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {isConnected ? "Submit Vote" : "Connect Wallet to Vote"}
-          </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row gap-3 mb-4">
+                {[
+                  { label: "For", value: VoteSupport.For, aria: "Vote For" },
+                  { label: "Against", value: VoteSupport.Against, aria: "Vote Against" },
+                  { label: "Abstain", value: VoteSupport.Abstain, aria: "Vote Abstain" },
+                ].map(({ label, value, aria }) => (
+                  <button
+                    key={label}
+                    onClick={() => setSelectedSupport(value)}
+                    disabled={isVoting}
+                    aria-label={aria}
+                    className={`flex-1 py-3 rounded-lg border-2 font-medium transition-all
+                      ${selectedSupport === value
+                        ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+                        : "border-gray-100 hover:border-gray-200 text-gray-600"}
+                      ${isVoting ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {voteError && (
+                <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex gap-2 items-start">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  {voteError}
+                </div>
+              )}
+
+              <button
+                onClick={handleCastVote}
+                disabled={selectedSupport === null || isVoting}
+                aria-busy={isVoting}
+                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+              >
+                {isVoting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Submitting Vote...
+                  </>
+                ) : (
+                  "Submit Vote"
+                )}
+              </button>
+            </>
+          )}
         </div>
       )}
 
       {voted && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
-          <p className="text-emerald-800 font-medium">Your vote has been recorded!</p>
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center" aria-live="polite">
+          <p className="text-emerald-800 font-medium">
+            Your vote {votedSupport !== null ? `(${VoteSupport[votedSupport]})` : ""} has been recorded!
+          </p>
         </div>
       )}
 
