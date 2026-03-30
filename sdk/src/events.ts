@@ -1,9 +1,5 @@
-import {
-  SorobanRpc,
-  xdr,
-  scValToNative,
-} from "@stellar/stellar-sdk";
-import { Network } from "./types";
+import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { GovernorSettings, Network } from "./types";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -11,111 +7,137 @@ const RPC_URLS: Record<Network, string> = {
   futurenet: "https://rpc-futurenet.stellar.org",
 };
 
-/**
- * Default polling interval in milliseconds.
- *
- * Soroban ledgers close roughly every 5–6 seconds on testnet. A 10-second
- * interval keeps RPC traffic low while still delivering near-real-time
- * updates. Pass a custom `intervalMs` to any subscription helper to override.
- */
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
 
-/** Shape of a raw Soroban contract event returned by `getEvents`. */
+const TOPICS = {
+  proposalCreated: "ProposalCreated",
+  voteCast: "VoteCast",
+  proposalQueued: "ProposalQueued",
+  proposalExecuted: "ProposalExecuted",
+  proposalCancelled: "ProposalCancelled",
+  proposalExpired: "ProposalExpired",
+  governorUpgraded: "GovernorUpgraded",
+  configUpdated: "ConfigUpdated",
+  legacyProposalCreated: "prop_crtd",
+  legacyVoteCast: "vote",
+  legacyProposalExecuted: "execute",
+} as const;
+
 export interface SorobanEvent {
-  /** Ledger sequence the event was emitted in */
   ledger: number;
-  /** Contract that emitted the event */
   contractId: string;
-  /** Decoded topic segments (symbol strings) */
   topic: string[];
-  /** Decoded event body value */
   value: unknown;
 }
 
-/** Decoded `prop_crtd` proposal-created event (NebGov governor). */
 export interface ProposalCreatedEventData {
   proposalId: bigint;
-  /** Proposer account strkey from the event topic */
   proposer: string;
+  description: string;
+  targets: unknown[];
+  fnNames: unknown[];
+  calldatas: unknown[];
   startLedger: number;
   endLedger: number;
 }
 
-export function parseProposalCreatedEvent(
-  event: SorobanEvent
-): ProposalCreatedEventData | null {
-  if (event.topic[0] !== "prop_crtd" || event.topic.length < 2) return null;
-  const proposer = String(event.topic[1]);
-  const raw = event.value;
-  if (!Array.isArray(raw) || raw.length < 7) return null;
-  try {
-    const proposalId = BigInt(raw[0] as number | bigint | string);
-    const startLedger = Number(raw[5]);
-    const endLedger = Number(raw[6]);
-    return { proposalId, proposer, startLedger, endLedger };
-  } catch {
-    return null;
-  }
+export interface VoteCastEventData {
+  proposalId: bigint;
+  voter: string;
+  support: number;
+  weight: bigint;
 }
 
-export function parseProposalQueuedEvent(
-  event: SorobanEvent
-): { proposalId: bigint; readyAt: bigint } | null {
-  if (event.topic[0] !== "ProposalQueued") return null;
-  const raw = event.value;
-  if (!Array.isArray(raw) || raw.length < 2) return null;
-  try {
-    return {
-      proposalId: BigInt(raw[0] as number | bigint | string),
-      readyAt: BigInt(raw[1] as number | bigint | string),
-    };
-  } catch {
-    return null;
-  }
+export interface ProposalQueuedEventData {
+  proposalId: bigint;
+  opId: unknown;
+  eta: bigint;
 }
 
-export function parseProposalExecutedEvent(event: SorobanEvent): bigint | null {
-  if (event.topic[0] !== "execute") return null;
-  const v = event.value;
-  try {
-    if (typeof v === "bigint") return v;
-    if (typeof v === "number") return BigInt(v);
-    return BigInt(v as number | bigint | string);
-  } catch {
-    return null;
-  }
+export interface ProposalExecutedEventData {
+  proposalId: bigint;
+  caller: string;
 }
 
-/** Options shared by all subscription helpers. */
+export interface ProposalCancelledEventData {
+  proposalId: bigint;
+  caller: string;
+}
+
+export interface ProposalExpiredEventData {
+  proposalId: bigint;
+  expiredAtLedger: number;
+}
+
+export interface GovernorUpgradedEventData {
+  oldHash: unknown;
+  newHash: unknown;
+}
+
+export interface ConfigUpdatedEventData {
+  oldSettings: GovernorSettings;
+  newSettings: GovernorSettings;
+}
+
 export interface SubscriptionOptions {
-  /** Stellar network to connect to */
   network: Network;
-  /** RPC URL override (optional — defaults to public endpoint) */
   rpcUrl?: string;
-  /**
-   * Polling interval in milliseconds.
-   * @default 10_000
-   */
   intervalMs?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+type EventRecord = Record<string, unknown>;
 
-function buildServer(opts: SubscriptionOptions): SorobanRpc.Server {
-  const rpcUrl = opts.rpcUrl ?? RPC_URLS[opts.network];
-  return new SorobanRpc.Server(rpcUrl, { allowHttp: false });
+function isRecord(value: unknown): value is EventRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Decode a single raw event from the `getEvents` response into a
- * friendly {@link SorobanEvent} shape.
- */
-function decodeEvent(
-  raw: SorobanRpc.Api.EventResponse
-): SorobanEvent {
-  const topic = raw.topic.map((t) => scValToNative(t) as string);
+function toBigInt(value: unknown): bigint | null {
+  try {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number" || typeof value === "string") return BigInt(value);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function toGovernorSettings(value: unknown): GovernorSettings | null {
+  if (!isRecord(value)) return null;
+
+  const votingDelay = toNumber(value.voting_delay);
+  const votingPeriod = toNumber(value.voting_period);
+  const quorumNumerator = toNumber(value.quorum_numerator);
+  const proposalThreshold = toBigInt(value.proposal_threshold);
+
+  if (
+    votingDelay === null ||
+    votingPeriod === null ||
+    quorumNumerator === null ||
+    proposalThreshold === null
+  ) {
+    return null;
+  }
+
+  return {
+    votingDelay,
+    votingPeriod,
+    quorumNumerator,
+    proposalThreshold,
+  };
+}
+
+function decodeEvent(raw: SorobanRpc.Api.EventResponse): SorobanEvent {
+  const topic = raw.topic.map((segment) => String(scValToNative(segment)));
   const value = scValToNative(raw.value);
 
   return {
@@ -126,11 +148,63 @@ function decodeEvent(
   };
 }
 
-/**
- * Fetch events from the Soroban RPC matching the given filters, starting
- * from `startLedger`. Returns the decoded events **and** the latest ledger
- * seen so the caller can paginate forward.
- */
+function buildServer(opts: SubscriptionOptions): SorobanRpc.Server {
+  return new SorobanRpc.Server(opts.rpcUrl ?? RPC_URLS[opts.network], {
+    allowHttp: false,
+  });
+}
+
+function createTopicSubscription(
+  governorAddress: string,
+  topicName: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions,
+  filter?: (event: SorobanEvent) => boolean
+): () => void {
+  const server = buildServer(opts);
+  const topicFilter = [xdr.ScVal.scvSymbol(topicName)];
+  const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+
+  let cursor = 0;
+  let initialized = false;
+  let stopped = false;
+
+  async function poll(): Promise<void> {
+    if (stopped) return;
+
+    try {
+      if (!initialized) {
+        const latest = await server.getLatestLedger();
+        cursor = latest.sequence;
+        initialized = true;
+      }
+
+      const { events, latestLedger } = await fetchEvents(
+        server,
+        governorAddress,
+        topicFilter,
+        cursor
+      );
+
+      for (const event of events) {
+        if (!stopped && (!filter || filter(event))) callback(event);
+      }
+
+      cursor = latestLedger + 1;
+    } catch {
+      // Retry on the next interval.
+    }
+  }
+
+  void poll();
+  const handle = setInterval(() => void poll(), intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(handle);
+  };
+}
+
 export async function fetchEvents(
   server: SorobanRpc.Server,
   contractId: string,
@@ -143,307 +217,299 @@ export async function fetchEvents(
       {
         type: "contract",
         contractIds: [contractId],
-        topics: [topicFilter.map((v) => v.toXDR("base64"))],
+        topics: [topicFilter.map((segment) => segment.toXDR("base64"))],
       },
     ],
     limit: 100,
   });
 
-  const events = (response.events ?? []).map(decodeEvent);
-  const latestLedger = response.latestLedger
-    ? Number(response.latestLedger)
-    : startLedger;
-
-  return { events, latestLedger };
+  return {
+    events: (response.events ?? []).map(decodeEvent),
+    latestLedger: response.latestLedger ? Number(response.latestLedger) : startLedger,
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+export function parseProposalCreatedEvent(
+  event: SorobanEvent
+): ProposalCreatedEventData | null {
+  if (event.topic[0] === TOPICS.legacyProposalCreated) {
+    if (!Array.isArray(event.value) || event.value.length < 7 || event.topic.length < 2) {
+      return null;
+    }
 
-/**
- * Subscribe to new `prop_crtd` (proposal created) events from the governor contract.
- *
- * Polls `SorobanRpc.Server.getEvents()` on the given interval and invokes
- * `callback` for every new proposal event discovered.
- *
- * **Cleaning up:** call the returned function to stop polling.
- *
- * @param governorAddress - Strkey contract address of the governor
- * @param callback        - Invoked with each decoded proposal event
- * @param opts            - Network, optional RPC URL, and polling interval
- * @returns An unsubscribe function — call it to stop polling
- *
- * @example
- * ```ts
- * const unsub = subscribeToProposals(
- *   "CABC...",
- *   (event) => console.log("New proposal!", event),
- *   { network: "testnet" },
- * );
- * // later…
- * unsub();
- * ```
- */
+    const proposalId = toBigInt(event.value[0]);
+    const startLedger = toNumber(event.value[5]);
+    const endLedger = toNumber(event.value[6]);
+
+    if (proposalId === null || startLedger === null || endLedger === null) return null;
+
+    return {
+      proposalId,
+      proposer: String(event.topic[1]),
+      description: String(event.value[1] ?? ""),
+      targets: Array.isArray(event.value[2]) ? event.value[2] : [],
+      fnNames: Array.isArray(event.value[3]) ? event.value[3] : [],
+      calldatas: Array.isArray(event.value[4]) ? event.value[4] : [],
+      startLedger,
+      endLedger,
+    };
+  }
+
+  if (event.topic[0] !== TOPICS.proposalCreated || !isRecord(event.value)) return null;
+
+  const proposalId = toBigInt(event.value.proposal_id);
+  const startLedger = toNumber(event.value.start_ledger);
+  const endLedger = toNumber(event.value.end_ledger);
+
+  if (proposalId === null || startLedger === null || endLedger === null) return null;
+
+  return {
+    proposalId,
+    proposer: String(event.value.proposer ?? ""),
+    description: String(event.value.description ?? ""),
+    targets: Array.isArray(event.value.targets) ? event.value.targets : [],
+    fnNames: Array.isArray(event.value.fn_names) ? event.value.fn_names : [],
+    calldatas: Array.isArray(event.value.calldatas) ? event.value.calldatas : [],
+    startLedger,
+    endLedger,
+  };
+}
+
+export function parseVoteCastEvent(event: SorobanEvent): VoteCastEventData | null {
+  if (event.topic[0] === TOPICS.legacyVoteCast) {
+    if (!Array.isArray(event.value) || event.value.length < 3 || event.topic.length < 2) {
+      return null;
+    }
+
+    const proposalId = toBigInt(event.value[0]);
+    const weight = toBigInt(event.value[2]);
+
+    if (proposalId === null || weight === null) return null;
+
+    return {
+      proposalId,
+      voter: String(event.topic[1]),
+      support: toNumber(event.value[1]) ?? -1,
+      weight,
+    };
+  }
+
+  if (event.topic[0] !== TOPICS.voteCast || !isRecord(event.value)) return null;
+
+  const proposalId = toBigInt(event.value.proposal_id);
+  const support = toNumber(event.value.support);
+  const weight = toBigInt(event.value.weight);
+
+  if (proposalId === null || support === null || weight === null) return null;
+
+  return {
+    proposalId,
+    voter: String(event.value.voter ?? ""),
+    support,
+    weight,
+  };
+}
+
+export function parseProposalQueuedEvent(
+  event: SorobanEvent
+): ProposalQueuedEventData | null {
+  if (event.topic[0] !== TOPICS.proposalQueued) return null;
+
+  if (Array.isArray(event.value)) {
+    const proposalId = toBigInt(event.value[0]);
+    const eta = toBigInt(event.value[1]);
+    if (proposalId === null || eta === null) return null;
+    return { proposalId, opId: null, eta };
+  }
+
+  if (!isRecord(event.value)) return null;
+  const proposalId = toBigInt(event.value.proposal_id);
+  const eta = toBigInt(event.value.eta);
+
+  if (proposalId === null || eta === null) return null;
+
+  return {
+    proposalId,
+    opId: event.value.op_id ?? null,
+    eta,
+  };
+}
+
+export function parseProposalExecutedEvent(
+  event: SorobanEvent
+): ProposalExecutedEventData | null {
+  if (event.topic[0] === TOPICS.legacyProposalExecuted) {
+    const proposalId = toBigInt(event.value);
+    if (proposalId === null) return null;
+    return {
+      proposalId,
+      caller: "",
+    };
+  }
+
+  if (event.topic[0] !== TOPICS.proposalExecuted || !isRecord(event.value)) return null;
+  const proposalId = toBigInt(event.value.proposal_id);
+  if (proposalId === null) return null;
+
+  return {
+    proposalId,
+    caller: String(event.value.caller ?? ""),
+  };
+}
+
+export function parseProposalCancelledEvent(
+  event: SorobanEvent
+): ProposalCancelledEventData | null {
+  if (event.topic[0] !== TOPICS.proposalCancelled || !isRecord(event.value)) return null;
+  const proposalId = toBigInt(event.value.proposal_id);
+  if (proposalId === null) return null;
+
+  return {
+    proposalId,
+    caller: String(event.value.caller ?? ""),
+  };
+}
+
+export function parseProposalExpiredEvent(
+  event: SorobanEvent
+): ProposalExpiredEventData | null {
+  if (event.topic[0] !== TOPICS.proposalExpired || !isRecord(event.value)) return null;
+  const proposalId = toBigInt(event.value.proposal_id);
+  const expiredAtLedger = toNumber(event.value.expired_at_ledger);
+
+  if (proposalId === null || expiredAtLedger === null) return null;
+
+  return {
+    proposalId,
+    expiredAtLedger,
+  };
+}
+
+export function parseGovernorUpgradedEvent(
+  event: SorobanEvent
+): GovernorUpgradedEventData | null {
+  if (event.topic[0] !== TOPICS.governorUpgraded || !isRecord(event.value)) return null;
+
+  return {
+    oldHash: event.value.old_hash ?? null,
+    newHash: event.value.new_hash ?? null,
+  };
+}
+
+export function parseConfigUpdatedEvent(
+  event: SorobanEvent
+): ConfigUpdatedEventData | null {
+  if (event.topic[0] !== TOPICS.configUpdated || !isRecord(event.value)) return null;
+
+  const oldSettings = toGovernorSettings(event.value.old_settings);
+  const newSettings = toGovernorSettings(event.value.new_settings);
+
+  if (!oldSettings || !newSettings) return null;
+
+  return {
+    oldSettings,
+    newSettings,
+  };
+}
+
 export function subscribeToProposals(
   governorAddress: string,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
-  const server = buildServer(opts);
-  const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const topicFilter = [xdr.ScVal.scvSymbol("prop_crtd")];
-
-  let cursor = 0;
-  let initialized = false;
-  let stopped = false;
-
-  async function poll(): Promise<void> {
-    if (stopped) return;
-
-    try {
-      if (!initialized) {
-        const info = await server.getLatestLedger();
-        cursor = info.sequence;
-        initialized = true;
-      }
-
-      const { events, latestLedger } = await fetchEvents(
-        server,
-        governorAddress,
-        topicFilter,
-        cursor
-      );
-
-      for (const event of events) {
-        if (!stopped) callback(event);
-      }
-
-      // Move cursor past the events we already processed
-      cursor = latestLedger + 1;
-    } catch {
-      // Silently retry on transient RPC errors; consumer can monitor via
-      // their own error boundary or logging.
-    }
-  }
-
-  const handle = setInterval(() => void poll(), intervalMs);
-  // Kick off the first poll immediately
-  void poll();
-
-  return () => {
-    stopped = true;
-    clearInterval(handle);
-  };
+  return createTopicSubscription(governorAddress, TOPICS.proposalCreated, callback, opts);
 }
 
-/**
- * Subscribe to `vote` events on a specific proposal.
- *
- * Polls `getEvents` with the `vote` topic (first segment). On-chain vote events
- * use `(vote, voter)` topics, so proposal id is taken from the event body and
- * matched against `proposalId`.
- *
- * **Cleaning up:** call the returned function to stop polling.
- *
- * @param governorAddress - Strkey contract address of the governor
- * @param proposalId      - The proposal to watch for votes
- * @param callback        - Invoked with each decoded vote event
- * @param opts            - Network, optional RPC URL, and polling interval
- * @returns An unsubscribe function — call it to stop polling
- *
- * @example
- * ```ts
- * const unsub = subscribeToVotes(
- *   "CABC...",
- *   1n,
- *   (event) => console.log("Vote cast!", event),
- *   { network: "testnet" },
- * );
- * // later…
- * unsub();
- * ```
- */
 export function subscribeToVotes(
   governorAddress: string,
   proposalId: bigint,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
-  const server = buildServer(opts);
-  const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const topicFilter = [xdr.ScVal.scvSymbol("vote")];
-  const wantId = proposalId;
-
-  let cursor = 0;
-  let initialized = false;
-  let stopped = false;
-
-  async function poll(): Promise<void> {
-    if (stopped) return;
-
-    try {
-      if (!initialized) {
-        const info = await server.getLatestLedger();
-        cursor = info.sequence;
-        initialized = true;
-      }
-
-      const { events, latestLedger } = await fetchEvents(
-        server,
-        governorAddress,
-        topicFilter,
-        cursor
-      );
-
-      for (const event of events) {
-        if (stopped) break;
-        const body = event.value;
-        const pid =
-          Array.isArray(body) && body.length > 0
-            ? BigInt(body[0] as number | bigint | string)
-            : null;
-        if (pid === wantId) callback(event);
-      }
-
-      cursor = latestLedger + 1;
-    } catch {
-      // Silently retry on transient RPC errors
-    }
-  }
-
-  const handle = setInterval(() => void poll(), intervalMs);
-  void poll();
-
-  return () => {
-    stopped = true;
-    clearInterval(handle);
-  };
+  return createTopicSubscription(
+    governorAddress,
+    TOPICS.voteCast,
+    callback,
+    opts,
+    (event) => parseVoteCastEvent(event)?.proposalId === proposalId
+  );
 }
 
-/**
- * Fetch historical `prop_crtd` (proposal created) events from a governor contract.
- * Paginates until the current ledger so large ranges are fully covered.
- */
 export async function getProposalEvents(
   governorAddress: string,
   fromLedger: number,
   opts: SubscriptionOptions
 ): Promise<SorobanEvent[]> {
   const server = buildServer(opts);
-  const topicFilter = [xdr.ScVal.scvSymbol("prop_crtd")];
   const latest = (await server.getLatestLedger()).sequence;
-  const out: SorobanEvent[] = [];
-  let start = Math.max(1, fromLedger);
+  const topicFilter = [xdr.ScVal.scvSymbol(TOPICS.proposalCreated)];
+  const events: SorobanEvent[] = [];
+  let startLedger = Math.max(1, fromLedger);
 
-  while (start <= latest) {
-    const { events, latestLedger } = await fetchEvents(
+  while (startLedger <= latest) {
+    const { events: page, latestLedger } = await fetchEvents(
       server,
       governorAddress,
       topicFilter,
-      start
+      startLedger
     );
-    if (events.length === 0) {
-      start = latestLedger + 1;
+
+    if (page.length === 0) {
+      startLedger = latestLedger + 1;
       continue;
     }
-    out.push(...events);
-    start = Math.max(...events.map((e) => e.ledger)) + 1;
+
+    events.push(...page);
+    startLedger = Math.max(...page.map((event) => event.ledger)) + 1;
   }
 
-  return out;
+  return events;
 }
 
-/**
- * Subscribe to `ProposalQueued` events for the governor contract.
- */
 export function subscribeToProposalQueued(
   governorAddress: string,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
-  const server = buildServer(opts);
-  const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const topicFilter = [xdr.ScVal.scvSymbol("ProposalQueued")];
-
-  let cursor = 0;
-  let initialized = false;
-  let stopped = false;
-
-  async function poll(): Promise<void> {
-    if (stopped) return;
-    try {
-      if (!initialized) {
-        const info = await server.getLatestLedger();
-        cursor = info.sequence;
-        initialized = true;
-      }
-      const { events, latestLedger } = await fetchEvents(
-        server,
-        governorAddress,
-        topicFilter,
-        cursor
-      );
-      for (const event of events) {
-        if (!stopped) callback(event);
-      }
-      cursor = latestLedger + 1;
-    } catch {
-      /* retry */
-    }
-  }
-
-  const handle = setInterval(() => void poll(), intervalMs);
-  void poll();
-  return () => {
-    stopped = true;
-    clearInterval(handle);
-  };
+  return createTopicSubscription(governorAddress, TOPICS.proposalQueued, callback, opts);
 }
 
-/**
- * Subscribe to `execute` events (proposal executed) for the governor contract.
- */
 export function subscribeToProposalExecuted(
   governorAddress: string,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
-  const server = buildServer(opts);
-  const intervalMs = opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const topicFilter = [xdr.ScVal.scvSymbol("execute")];
+  return createTopicSubscription(governorAddress, TOPICS.proposalExecuted, callback, opts);
+}
 
-  let cursor = 0;
-  let initialized = false;
-  let stopped = false;
+export function subscribeToProposalCancelled(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.proposalCancelled, callback, opts);
+}
 
-  async function poll(): Promise<void> {
-    if (stopped) return;
-    try {
-      if (!initialized) {
-        const info = await server.getLatestLedger();
-        cursor = info.sequence;
-        initialized = true;
-      }
-      const { events, latestLedger } = await fetchEvents(
-        server,
-        governorAddress,
-        topicFilter,
-        cursor
-      );
-      for (const event of events) {
-        if (!stopped) callback(event);
-      }
-      cursor = latestLedger + 1;
-    } catch {
-      /* retry */
-    }
-  }
+export function subscribeToProposalExpired(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.proposalExpired, callback, opts);
+}
 
-  const handle = setInterval(() => void poll(), intervalMs);
-  void poll();
-  return () => {
-    stopped = true;
-    clearInterval(handle);
-  };
+export function subscribeToGovernorUpgraded(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.governorUpgraded, callback, opts);
+}
+
+export function subscribeToConfigUpdated(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.configUpdated, callback, opts);
 }

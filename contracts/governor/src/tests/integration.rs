@@ -19,8 +19,8 @@ use crate::{GovernorContract, GovernorContractClient, VoteType, Proposal, Propos
 
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Ledger as _},
-    token, Address, Bytes, Env, Symbol,
+    testutils::{Address as _, Events, Ledger as _},
+    token, Address, Bytes, Env, Symbol, TryIntoVal,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,6 +57,17 @@ impl MockTarget {
 
 use sorogov_timelock::{TimelockContract, TimelockContractClient};
 use sorogov_token_votes::{TokenVotesContract, TokenVotesContractClient};
+
+fn count_topic(env: &Env, topic_name: &str) -> usize {
+    env.events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
+            first.is_ok() && first.unwrap() == Symbol::new(env, topic_name)
+        })
+        .count()
+}
 
 // ---------------------------------------------------------------------------
 // Integration test
@@ -282,4 +293,9 @@ fn test_full_proposal_lifecycle() {
         ProposalState::Executed,
         "expected Executed after execute()"
     );
+
+    assert_eq!(count_topic(&env, "ProposalCreated"), 1);
+    assert_eq!(count_topic(&env, "VoteCast"), 2);
+    assert_eq!(count_topic(&env, "ProposalQueued"), 1);
+    assert_eq!(count_topic(&env, "ProposalExecuted"), 1);
 }

@@ -40,15 +40,31 @@ export {
   getProposalEvents,
   subscribeToProposalQueued,
   subscribeToProposalExecuted,
+  subscribeToProposalCancelled,
+  subscribeToProposalExpired,
+  subscribeToGovernorUpgraded,
+  subscribeToConfigUpdated,
 } from "./events";
 export type {
   SorobanEvent,
   SubscriptionOptions,
   ProposalCreatedEventData,
+  VoteCastEventData,
+  ProposalQueuedEventData,
+  ProposalExecutedEventData,
+  ProposalCancelledEventData,
+  ProposalExpiredEventData,
+  GovernorUpgradedEventData,
+  ConfigUpdatedEventData,
 } from "./events";
 export {
   parseProposalCreatedEvent,
+  parseVoteCastEvent,
   parseProposalQueuedEvent,
   parseProposalExecutedEvent,
+  parseProposalCancelledEvent,
+  parseProposalExpiredEvent,
+  parseGovernorUpgradedEvent,
+  parseConfigUpdatedEvent,
 } from "./events";
 export * from "./types";

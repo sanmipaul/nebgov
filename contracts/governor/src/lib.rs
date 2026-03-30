@@ -1,5 +1,7 @@
 #![no_std]
 
+mod events;
+
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
     Env, String, Symbol, Vec,
@@ -214,6 +216,8 @@ pub enum DataKey {
     VoteReceipt(u64, Address),
     /// The timelock op-id (Bytes) for a proposal after queue() is called.
     QueuedOpId(u64),
+    ProposalExpiredEmitted(u64),
+    CurrentWasmHash,
     /// Active voting strategy (Single or MultiToken).
     VotingStrategy,
     /// Whether dynamic quorum is enabled.
@@ -245,6 +249,30 @@ pub struct GovernorContract;
 
 #[contractimpl]
 impl GovernorContract {
+    fn emit_proposal_expired_if_needed(env: &Env, proposal: &Proposal) {
+        let expired_emitted: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProposalExpiredEmitted(proposal.id))
+            .unwrap_or(false);
+
+        if expired_emitted || proposal.cancelled || proposal.executed || proposal.queued {
+            return;
+        }
+
+        let current = env.ledger().sequence();
+        let quorum = Self::quorum(env.clone(), proposal.id);
+        let quorum_met = proposal.votes_for >= quorum;
+        let for_wins = proposal.votes_for > proposal.votes_against;
+
+        if current > proposal.end_ledger && !(quorum_met && for_wins) {
+            events::emit_proposal_expired(env, proposal.id, proposal.end_ledger);
+            env.storage()
+                .persistent()
+                .set(&DataKey::ProposalExpiredEmitted(proposal.id), &true);
+        }
+    }
+
     /// Initialize the governor with configuration.
     pub fn initialize(
         env: Env,
@@ -283,6 +311,9 @@ impl GovernorContract {
             .instance()
             .set(&DataKey::ProposalGracePeriod, &proposal_grace_period);
         env.storage().instance().set(&DataKey::ProposalCount, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::CurrentWasmHash, &BytesN::from_array(&env, &[0u8; 32]));
         env.storage()
             .instance()
             .set(&DataKey::VotingStrategy, &VotingStrategy::Single);
@@ -511,7 +542,7 @@ impl GovernorContract {
             .instance()
             .get(&DataKey::VoteType)
             .unwrap_or(VoteType::Extended);
-        
+
         match vote_type {
             VoteType::Simple => {
                 if matches!(support, VoteSupport::Abstain) {
@@ -688,11 +719,11 @@ impl GovernorContract {
         }
 
         let proposal_state = Self::state(env.clone(), proposal_id);
-        
+
         if proposal_state == ProposalState::Expired {
             env.panic_with_error(GovernorError::ProposalExpired);
         }
-        
+
         assert!(
             proposal_state == ProposalState::Succeeded,
             "proposal not succeeded"
@@ -737,11 +768,8 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
 
-        // Emit ProposalQueued event with the timelock ETA (`ready_at`).
-        env.events().publish(
-            (Symbol::new(&env, "ProposalQueued"),),
-            (proposal_id, ready_at),
-        );
+        let first_op_id = proposal.op_ids.get(0).unwrap();
+        events::emit_proposal_queued(&env, proposal_id, &first_op_id, ready_at);
     }
 
     /// Execute a queued proposal.
@@ -797,8 +825,7 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
 
-        env.events()
-            .publish((symbol_short!("execute"),), proposal_id);
+        events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
     /// Cancel a proposal with proper authorization.
@@ -806,13 +833,13 @@ impl GovernorContract {
     /// Guardian can cancel any Active proposal as an emergency veto.
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
-        
+
         let proposal: Proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
             .expect("proposal not found");
-        
+
         let state = Self::state(env.clone(), proposal_id);
         let guardian: Address = env
             .storage()
@@ -832,12 +859,7 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        
-        // Emit ProposalCancelled event with proposal_id and canceller
-        env.events().publish(
-            (symbol_short!("cancel"), caller.clone()),
-            (proposal_id, caller),
-        );
+        events::emit_proposal_cancelled(&env, proposal_id, &caller);
     }
 
     /// Get the current state of a proposal.
@@ -870,6 +892,8 @@ impl GovernorContract {
         if current <= proposal.end_ledger {
             return ProposalState::Active;
         }
+
+        Self::emit_proposal_expired_if_needed(&env, &proposal);
 
         // Voting ended.
         let quorum = Self::quorum(env.clone(), proposal_id);
@@ -1143,10 +1167,7 @@ impl GovernorContract {
                 .remove(&DataKey::ReflectorOracle),
         }
 
-        env.events().publish(
-            (Symbol::new(&env, "ConfigUpdated"),),
-            (old_settings, new_settings),
-        );
+        events::emit_config_updated(&env, &old_settings, &new_settings);
     }
 
     /// Get total proposal count.
@@ -1303,10 +1324,17 @@ impl GovernorContract {
     /// after this in the same proposal's calldata.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         env.current_contract_address().require_auth();
+        let old_wasm_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentWasmHash)
+            .unwrap_or(BytesN::from_array(&env, &[0u8; 32]));
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
-        env.events()
-            .publish((symbol_short!("upgrade"),), new_wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::CurrentWasmHash, &new_wasm_hash);
+        events::emit_governor_upgraded(&env, &old_wasm_hash, &new_wasm_hash);
     }
 
     /// Migrate contract storage after a WASM upgrade.

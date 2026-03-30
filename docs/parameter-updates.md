@@ -94,10 +94,7 @@ stellar contract invoke \
 When configuration is updated, a `ConfigUpdated` event is emitted:
 
 ```rust
-env.events().publish(
-    (Symbol::new(&env, "ConfigUpdated"),),
-    (old_settings, new_settings),
-);
+events::emit_config_updated(&env, &old_settings, &new_settings);
 ```
 
 This allows off-chain indexers and frontends to track parameter changes over time.

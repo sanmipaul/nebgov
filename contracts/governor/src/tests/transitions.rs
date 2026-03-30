@@ -1,7 +1,7 @@
 use crate::*;
 use soroban_sdk::{
-    contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Address, Bytes, Env,
-    String, Symbol,
+    contract, contractimpl, testutils::Address as _, testutils::Events, testutils::Ledger as _,
+    Address, Bytes, Env, String, Symbol, TryIntoVal,
 };
 
 /// Mock votes contract that returns a high vote count for any address,
@@ -73,6 +73,17 @@ fn make_proposal(env: &Env, client: &GovernorContractClient, proposer: &Address)
     client.propose(proposer, &description, &targets, &fn_names, &calldatas)
 }
 
+fn count_topic(env: &Env, topic_name: &str) -> usize {
+    env.events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
+            first.is_ok() && first.unwrap() == Symbol::new(env, topic_name)
+        })
+        .count()
+}
+
 #[test]
 /// Verifies that a proposal's initial state is Pending before the voting delay has passed.
 fn test_pending_state_before_start_ledger() {
@@ -102,6 +113,11 @@ fn test_defeated_when_no_votes() {
     // end_ledger = 10 + 100 = 110. Advance to 111.
     env.ledger().set_sequence_number(111);
     assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
+    assert_eq!(count_topic(&env, "ProposalExpired"), 1);
+
+    // Re-reading state should not emit duplicate expiry events.
+    assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
+    assert_eq!(count_topic(&env, "ProposalExpired"), 1);
 }
 
 #[test]
@@ -160,6 +176,7 @@ fn test_cancelled_by_proposer() {
 
     client.cancel(&proposer, &proposal_id);
     assert_eq!(client.state(&proposal_id), ProposalState::Cancelled);
+    assert_eq!(count_topic(&env, "ProposalCancelled"), 1);
 }
 
 #[test]

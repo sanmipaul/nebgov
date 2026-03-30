@@ -10,9 +10,20 @@ mod transitions;
 
 use crate::{GovernorContract, GovernorContractClient, GovernorSettings, VoteType};
 use soroban_sdk::{
-    testutils::{Address as _, MockAuth, MockAuthInvoke},
-    Address, BytesN, Env, IntoVal,
+    testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
+    Address, BytesN, Env, IntoVal, Symbol, TryIntoVal,
 };
+
+fn count_topic(env: &Env, topic_name: &str) -> usize {
+    env.events()
+        .all()
+        .iter()
+        .filter(|(_, topics, _)| {
+            let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
+            first.is_ok() && first.unwrap() == Symbol::new(env, topic_name)
+        })
+        .count()
+}
 
 #[test]
 #[should_panic]
@@ -171,4 +182,16 @@ fn update_config_succeeds_with_contract_self_auth() {
     assert_eq!(updated.voting_period, 2000);
     assert_eq!(updated.quorum_numerator, 5);
     assert_eq!(updated.proposal_threshold, 1000);
+    assert_eq!(count_topic(&env, "ConfigUpdated"), 1);
+}
+
+#[test]
+fn governor_upgraded_event_helper_emits_expected_topic() {
+    let env = Env::default();
+    let old_hash = BytesN::from_array(&env, &[7u8; 32]);
+    let new_hash = BytesN::from_array(&env, &[8u8; 32]);
+
+    crate::events::emit_governor_upgraded(&env, &old_hash, &new_hash);
+
+    assert_eq!(count_topic(&env, "GovernorUpgraded"), 1);
 }
