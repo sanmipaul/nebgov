@@ -22,7 +22,6 @@ import {
   newArgRow,
   type CalldataArgRow,
 } from "../../lib/treasury-calldata";
-  calldataArgRowToScVal,
 import { useWallet } from "../../lib/wallet-context";
 
 const STORAGE_KEY = "nebgov-propose-wizard-v1";
@@ -171,6 +170,7 @@ function buildPayload(
     fnNames: actions.map((a) => a.fnName.trim()),
     calldatas: actions.map((a) => encodeGovernorCalldataBytes(a.args)),
   };
+}
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -783,8 +783,7 @@ function ProposeWizardInner() {
                       {act.args.filter((r) => r.value.trim() !== "").length} argument(s) encoded as XDR
                     </p>
                   </div>
-                )}
-              </li>
+                )}              </li>
             ))}
           </ul>
         </div>
