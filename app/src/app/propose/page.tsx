@@ -172,6 +172,17 @@ function buildPayload(
   };
 }
 
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function getActionCalldataHex(args: CalldataArgRow[]): string {
+  const bytes = encodeGovernorCalldataBytes(args);
+  return toHex(bytes);
+}
+
 function ProposeWizardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -762,7 +773,17 @@ function ProposeWizardInner() {
                     <span className="text-xs text-red-600">{act.simulateError}</span>
                   )}
                 </div>
-              </li>
+                {act.args.length > 0 && act.args.some((r) => r.value.trim() !== "") && (
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <p className="text-xs text-gray-500 mb-1">Encoded calldata (hex)</p>
+                    <pre className="text-xs font-mono bg-gray-50 rounded-lg p-2 overflow-x-auto text-gray-700 break-all">
+                      {getActionCalldataHex(act.args)}
+                    </pre>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {act.args.filter((r) => r.value.trim() !== "").length} argument(s) encoded as XDR
+                    </p>
+                  </div>
+                )}              </li>
             ))}
           </ul>
         </div>

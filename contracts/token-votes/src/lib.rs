@@ -1,6 +1,7 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env};
+use soroban_sdk::xdr::ToXdr;
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -17,6 +18,7 @@ pub enum DataKey {
     TotalCheckpoints,     // Vec<Checkpoint> for total supply
     Token,                // underlying SEP-41 token address
     Admin,
+    Nonce(Address),           // owner -> nonce for delegate_by_sig
 }
 
 #[contract]
@@ -281,7 +283,87 @@ impl TokenVotesContract {
         }
         checkpoints.get(low - 1).unwrap().votes
     }
-}
+
+    /// Delegate voting power by signature (gasless for the token holder).
+    ///
+    /// A relayer submits this on behalf of a token holder who signed a message
+    /// off-chain. The holder only needs to sign, no gas required.
+    ///
+    /// # Arguments
+    /// * `owner` - The token holder who signed the delegation message
+    /// * `delegatee` - The address to delegate voting power to
+    /// * `nonce` - Unique nonce to prevent replay attacks
+    /// * `expiry` - Unix timestamp after which the signature is invalid
+    /// * `signature` - Ed25519 signature over (owner, delegatee, nonce, expiry)
+    pub fn delegate_by_sig(
+        env: Env,
+        owner: Address,
+        delegatee: Address,
+        nonce: u64,
+        expiry: u64,
+        signature: BytesN<64>,
+    ) {
+        // Verify expiry against current ledger timestamp
+        let current_time = env.ledger().timestamp();
+        assert!(current_time <= expiry, "signature expired");
+
+        // Verify and increment nonce (prevent replay)
+        let nonce_key = DataKey::Nonce(owner.clone());
+        let stored_nonce: u64 = env
+            .storage()
+            .persistent()
+            .get(&nonce_key)
+            .unwrap_or(0);
+        assert!(nonce == stored_nonce, "invalid nonce");
+        env.storage().persistent().set(&nonce_key, &(stored_nonce + 1));
+
+        // Build message to verify: (owner, delegatee, nonce, expiry)
+        let mut message = Bytes::new(&env);
+        message.append(&owner.to_xdr(&env));
+        message.append(&delegatee.to_xdr(&env));
+        message.append(&nonce.to_xdr(&env));
+        message.append(&expiry.to_xdr(&env));
+
+        // Verify ed25519 signature
+        let message_hash = env.crypto().sha256(&message);
+        env.crypto().ed25519_verify(&owner, &message_hash, &signature);
+
+        // Get token balance
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .expect("token not set");
+        let balance = token::TokenClient::new(&env, &token_addr).balance(&owner);
+
+        // Determine whether this is a first-time delegation or a re-delegation.
+        let previous_delegate: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Delegate(owner.clone()));
+
+        if let Some(old_delegatee) = previous_delegate.clone() {
+            if old_delegatee != delegatee {
+                Self::update_account_votes(&env, old_delegatee.clone(), -balance);
+                Self::update_account_votes(&env, delegatee.clone(), balance);
+            }
+        } else {
+            // First time delegation adds to total supply
+            if balance > 0 {
+                Self::update_total_supply_checkpoint(&env, balance);
+            }
+            Self::update_account_votes(&env, delegatee.clone(), balance);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Delegate(owner.clone()), &delegatee);
+
+        env.events().publish(
+            (symbol_short!("del_chsh"), owner.clone()),
+            (previous_delegate, delegatee),
+        );
+    }
 
 #[cfg(test)]
 mod tests {
@@ -565,3 +647,6 @@ mod tests {
         assert_eq!(client.get_past_votes(&user1, &100), 1300);
     }
 }
+
+#[cfg(test)]
+mod invariant_tests;
