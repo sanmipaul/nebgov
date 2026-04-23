@@ -3,8 +3,8 @@
 mod events;
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
-    Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, Bytes, BytesN, Env, String,
+    Symbol, Vec,
 };
 
 /// Governor error codes.
@@ -251,14 +251,6 @@ pub enum DataKey {
     ProposalPeriodDuration,
 }
 
-/// Errors returned by the governor contract.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum GovernorError {
-    /// Proposal metadata URI cannot be empty.
-    EmptyMetadataUri = 1,
-}
-
 #[contract]
 pub struct GovernorContract;
 
@@ -326,9 +318,10 @@ impl GovernorContract {
             .instance()
             .set(&DataKey::ProposalGracePeriod, &proposal_grace_period);
         env.storage().instance().set(&DataKey::ProposalCount, &0u64);
-        env.storage()
-            .instance()
-            .set(&DataKey::CurrentWasmHash, &BytesN::from_array(&env, &[0u8; 32]));
+        env.storage().instance().set(
+            &DataKey::CurrentWasmHash,
+            &BytesN::from_array(&env, &[0u8; 32]),
+        );
         env.storage()
             .instance()
             .set(&DataKey::VotingStrategy, &VotingStrategy::Single);
@@ -348,7 +341,7 @@ impl GovernorContract {
         env.storage()
             .instance()
             .set(&DataKey::ProposalPeriodDuration, &10_000u32); // ~24 hour period
-        // Initialize pause state (not paused by default)
+                                                                // Initialize pause state (not paused by default)
         env.storage().instance().set(&DataKey::IsPaused, &false);
         // Set admin as initial pauser
         env.storage().instance().set(&DataKey::Pauser, &admin);
@@ -407,20 +400,21 @@ impl GovernorContract {
 
         // Rate limiting checks (Issue #188)
         let current_ledger = env.ledger().sequence();
-        
+
         // Check cooldown period
         let cooldown: u32 = env
             .storage()
             .instance()
             .get(&DataKey::ProposalCooldown)
             .unwrap_or(100);
-        let last_proposal_ledger: u32 = env
+        let last_proposal_ledger: Option<u32> = env
             .storage()
             .persistent()
-            .get(&DataKey::LastProposalLedger(proposer.clone()))
-            .unwrap_or(0);
-        if current_ledger < last_proposal_ledger + cooldown {
-            env.panic_with_error(GovernorError::ProposalRateLimited);
+            .get(&DataKey::LastProposalLedger(proposer.clone()));
+        if let Some(last) = last_proposal_ledger {
+            if current_ledger < last + cooldown {
+                env.panic_with_error(GovernorError::ProposalRateLimited);
+            }
         }
 
         // Check max proposals per period
@@ -434,14 +428,17 @@ impl GovernorContract {
             .instance()
             .get(&DataKey::MaxProposalsPerPeriod)
             .unwrap_or(5);
-        
+
         let current_period = current_ledger / period_duration;
         let proposals_in_period: u32 = env
             .storage()
             .persistent()
-            .get(&DataKey::ProposalsInPeriod(proposer.clone(), current_period))
+            .get(&DataKey::ProposalsInPeriod(
+                proposer.clone(),
+                current_period,
+            ))
             .unwrap_or(0);
-        
+
         if proposals_in_period >= max_proposals {
             env.panic_with_error(GovernorError::ProposalRateLimited);
         }
@@ -511,25 +508,12 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::LastProposalLedger(proposer.clone()), &current);
-        env.storage()
-            .persistent()
-            .set(&DataKey::ProposalsInPeriod(proposer.clone(), current_period), &(proposals_in_period + 1));
-
-        // Emit ProposalCreated event with all proposal fields
-        env.events().publish(
-            (symbol_short!("prop_crtd"), proposer.clone()),
-            (
-                proposal_id,
-                description,
-                description_hash,
-                metadata_uri,
-                targets,
-                fn_names,
-                calldatas,
-                current + voting_delay,
-                current + voting_delay + voting_period,
-            ),
+        env.storage().persistent().set(
+            &DataKey::ProposalsInPeriod(proposer.clone(), current_period),
+            &(proposals_in_period + 1),
         );
+
+        events::emit_proposal_created(&env, &proposal);
 
         proposal_id
     }
@@ -585,8 +569,7 @@ impl GovernorContract {
         voter.require_auth();
 
         // Validate vote support against configured vote type
-        Self::validate_vote_support(&env, &support)
-            .unwrap_or_else(|e| env.panic_with_error(e));
+        Self::validate_vote_support(&env, &support).unwrap_or_else(|e| env.panic_with_error(e));
 
         let voted: bool = env
             .storage()
@@ -640,10 +623,7 @@ impl GovernorContract {
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
         // Emit VoteCast event including the weighted vote power.
-        env.events().publish(
-            (symbol_short!("vote"), voter),
-            (proposal_id, support, weight),
-        );
+        events::emit_vote_cast(&env, &voter, proposal_id, &support, weight);
     }
 
     /// Cast a vote with an on-chain reason string.
@@ -657,8 +637,7 @@ impl GovernorContract {
         voter.require_auth();
 
         // Validate vote support against configured vote type
-        Self::validate_vote_support(&env, &support)
-            .unwrap_or_else(|e| env.panic_with_error(e));
+        Self::validate_vote_support(&env, &support).unwrap_or_else(|e| env.panic_with_error(e));
 
         let voted: bool = env
             .storage()
@@ -715,10 +694,7 @@ impl GovernorContract {
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
         // Emit VoteCastWithReason event
-        env.events().publish(
-            (symbol_short!("vote_rsn"), voter),
-            (proposal_id, support, reason),
-        );
+        events::emit_vote_cast_with_reason(&env, &voter, proposal_id, &support, weight, reason);
     }
 
     /// Queue a succeeded proposal for execution via the timelock.
@@ -779,7 +755,15 @@ impl GovernorContract {
             let target = proposal.targets.get(i).unwrap();
             let fn_name = proposal.fn_names.get(i).unwrap();
             let calldata = proposal.calldatas.get(i).unwrap();
-            let op_id = timelock.schedule(&gov_addr, &target, &calldata, &fn_name, &delay, &empty_bytes, &empty_bytes);
+            let op_id = timelock.schedule(
+                &gov_addr,
+                &target,
+                &calldata,
+                &fn_name,
+                &delay,
+                &empty_bytes,
+                &empty_bytes,
+            );
             op_ids.push_back(op_id);
         }
 
@@ -795,11 +779,6 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::QueueTime(proposal_id), &queue_time);
 
-        // Emit ProposalQueued event with the timelock ETA (`ready_at`) and veto window info.
-        env.events().publish(
-            (Symbol::new(&env, "ProposalQueued"),),
-            (proposal_id, ready_at, queue_time),
-        );
         let first_op_id = proposal.op_ids.get(0).unwrap();
         events::emit_proposal_queued(&env, proposal_id, &first_op_id, ready_at);
     }
@@ -894,6 +873,56 @@ impl GovernorContract {
         events::emit_proposal_cancelled(&env, proposal_id, &caller);
     }
 
+    /// Cancel a proposal via governance vote.
+    ///
+    /// This function can only be called by the governor contract itself,
+    /// which means it must be triggered as an action in a successful proposal.
+    /// This allows the community to cancel other proposals through the standard
+    /// voting process.
+    ///
+    /// If the target proposal is already queued, its associated timelock
+    /// operations are also cancelled.
+    pub fn cancel_by_governance(env: Env, proposal_id: u64) {
+        // Only callable by the governor contract itself
+        env.current_contract_address().require_auth();
+
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found");
+
+        // Verify the proposal is not already executed or cancelled
+        assert!(
+            !proposal.executed && !proposal.cancelled,
+            "proposal already executed or cancelled"
+        );
+
+        let mut proposal_mut = proposal;
+        proposal_mut.cancelled = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal_mut);
+
+        // If the proposal was queued, cancel its timelock operations
+        if proposal_mut.queued {
+            let timelock_addr: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Timelock)
+                .expect("timelock not set");
+            let timelock = TimelockClient::new(&env, &timelock_addr);
+            let gov_addr = env.current_contract_address();
+
+            for i in 0..proposal_mut.op_ids.len() {
+                let op_id = proposal_mut.op_ids.get(i).unwrap();
+                timelock.cancel(&gov_addr, &op_id);
+            }
+        }
+
+        events::emit_proposal_cancelled(&env, proposal_id, &env.current_contract_address());
+    }
+
     /// Cancel a queued proposal during the veto window.
     ///
     /// Only the guardian can cancel a queued proposal, and only within the veto
@@ -912,7 +941,10 @@ impl GovernorContract {
             .expect("proposal not found");
 
         // Verify the proposal is queued
-        assert!(proposal.queued && !proposal.cancelled, "proposal not queued");
+        assert!(
+            proposal.queued && !proposal.cancelled,
+            "proposal not queued"
+        );
 
         let guardian: Address = env
             .storage()
@@ -921,7 +953,10 @@ impl GovernorContract {
             .expect("guardian not set");
 
         // Only guardian can cancel queued proposals
-        assert!(caller == guardian, "only guardian can cancel queued proposals");
+        assert!(
+            caller == guardian,
+            "only guardian can cancel queued proposals"
+        );
 
         // Get the queue time for veto window check
         let queue_time: u32 = env
@@ -942,12 +977,12 @@ impl GovernorContract {
         // Check if we're still in the veto window
         let current_ledger = env.ledger().sequence();
         let veto_window_end = queue_time + (delay / 10u64) as u32; // Assuming ~10 seconds per ledger, roughly 1 ledger per second
-        
+
         // For simplicity, use delay directly as ledger count (adjusting for typical Soroban block times)
         // The veto window should close after timelock_delay seconds
         // Conversion: assume timelock delay is in seconds and we need ledger conversion
         let veto_window_end_ledger = queue_time + ((delay / 10) as u32); // Roughly 1 ledger per 10 seconds
-        
+
         assert!(
             current_ledger < veto_window_end_ledger,
             "veto window closed"
@@ -967,9 +1002,9 @@ impl GovernorContract {
             timelock.cancel(&gov_addr, &op_id);
         }
 
-        // Emit ProposalCancelledFromQueue event
+        // Emit ProposalCancelledFromQueue event (TODO: add helper for veto event)
         env.events().publish(
-            (symbol_short!("veto"), caller.clone()),
+            (Symbol::new(&env, "ProposalCancelled"), caller.clone()),
             (proposal_id, queue_time, current_ledger),
         );
     }
@@ -1078,10 +1113,7 @@ impl GovernorContract {
         }
 
         // Try to fetch token price from Reflector oracle.
-        let oracle_opt: Option<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::ReflectorOracle);
+        let oracle_opt: Option<Address> = env.storage().instance().get(&DataKey::ReflectorOracle);
         if let Some(oracle_addr) = oracle_opt {
             let min_quorum_usd: i128 = env
                 .storage()
@@ -1188,10 +1220,7 @@ impl GovernorContract {
                 .instance()
                 .get(&DataKey::UseDynamicQuorum)
                 .unwrap_or(false),
-            reflector_oracle: env
-                .storage()
-                .instance()
-                .get(&DataKey::ReflectorOracle),
+            reflector_oracle: env.storage().instance().get(&DataKey::ReflectorOracle),
             min_quorum_usd: env
                 .storage()
                 .instance()
@@ -1238,18 +1267,20 @@ impl GovernorContract {
         env.storage()
             .instance()
             .set(&DataKey::QuorumNumerator, &new_settings.quorum_numerator);
-        env.storage()
-            .instance()
-            .set(&DataKey::ProposalThreshold, &new_settings.proposal_threshold);
+        env.storage().instance().set(
+            &DataKey::ProposalThreshold,
+            &new_settings.proposal_threshold,
+        );
         env.storage()
             .instance()
             .set(&DataKey::Guardian, &new_settings.guardian);
         env.storage()
             .instance()
             .set(&DataKey::VoteType, &new_settings.vote_type);
-        env.storage()
-            .instance()
-            .set(&DataKey::ProposalGracePeriod, &new_settings.proposal_grace_period);
+        env.storage().instance().set(
+            &DataKey::ProposalGracePeriod,
+            &new_settings.proposal_grace_period,
+        );
         env.storage()
             .instance()
             .set(&DataKey::UseDynamicQuorum, &new_settings.use_dynamic_quorum);
@@ -1262,21 +1293,20 @@ impl GovernorContract {
         env.storage()
             .instance()
             .set(&DataKey::ProposalCooldown, &new_settings.proposal_cooldown);
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxProposalsPerPeriod, &new_settings.max_proposals_per_period);
-        env.storage()
-            .instance()
-            .set(&DataKey::ProposalPeriodDuration, &new_settings.proposal_period_duration);
+        env.storage().instance().set(
+            &DataKey::MaxProposalsPerPeriod,
+            &new_settings.max_proposals_per_period,
+        );
+        env.storage().instance().set(
+            &DataKey::ProposalPeriodDuration,
+            &new_settings.proposal_period_duration,
+        );
         match new_settings.reflector_oracle {
             Some(ref addr) => env
                 .storage()
                 .instance()
                 .set(&DataKey::ReflectorOracle, addr),
-            None => env
-                .storage()
-                .instance()
-                .remove(&DataKey::ReflectorOracle),
+            None => env.storage().instance().remove(&DataKey::ReflectorOracle),
         }
 
         events::emit_config_updated(&env, &old_settings, &new_settings);
@@ -1353,10 +1383,7 @@ impl GovernorContract {
                 .storage()
                 .instance()
                 .set(&DataKey::ReflectorOracle, &addr),
-            None => env
-                .storage()
-                .instance()
-                .remove(&DataKey::ReflectorOracle),
+            None => env.storage().instance().remove(&DataKey::ReflectorOracle),
         }
     }
 
@@ -1379,8 +1406,7 @@ impl GovernorContract {
             VotingStrategy::MultiToken(tokens) => {
                 let mut total: i128 = 0;
                 for wt in tokens.iter() {
-                    let votes =
-                        VotesClient::new(env, &wt.token).get_past_votes(voter, ledger);
+                    let votes = VotesClient::new(env, &wt.token).get_past_votes(voter, ledger);
                     total += (votes * wt.weight_bps as i128) / 10_000;
                 }
                 total
@@ -1482,12 +1508,10 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::UnauthorizedPause);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::IsPaused, &true);
+        env.storage().instance().set(&DataKey::IsPaused, &true);
 
         env.events().publish(
-            (symbol_short!("paused"),),
+            (Symbol::new(&env, "ContractPaused"),),
             (caller, env.ledger().sequence()),
         );
     }
@@ -1497,12 +1521,10 @@ impl GovernorContract {
     pub fn unpause(env: Env) {
         env.current_contract_address().require_auth();
 
-        env.storage()
-            .instance()
-            .set(&DataKey::IsPaused, &false);
+        env.storage().instance().set(&DataKey::IsPaused, &false);
 
         env.events().publish(
-            (symbol_short!("unpaused"),),
+            (Symbol::new(&env, "ContractUnpaused"),),
             env.ledger().sequence(),
         );
     }
@@ -1533,9 +1555,7 @@ impl GovernorContract {
             .get(&DataKey::Pauser)
             .expect("pauser not set");
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Pauser, &new_pauser);
+        env.storage().instance().set(&DataKey::Pauser, &new_pauser);
 
         env.events().publish(
             (Symbol::new(&env, "PauserChanged"),),
@@ -1602,7 +1622,10 @@ mod test {
         let description = String::from_str(env, "Test proposal");
 
         // Compute SHA-256 hash of the description
-        let description_hash = env.crypto().sha256(&Bytes::from_slice(env, b"Test proposal")).into();
+        let description_hash = env
+            .crypto()
+            .sha256(&Bytes::from_slice(env, b"Test proposal"))
+            .into();
 
         // Dummy metadata URI (could be ipfs or https)
         let metadata_uri = String::from_str(env, "https://example.com/proposal/1");
@@ -1642,7 +1665,18 @@ mod test {
         let voter = Address::generate(&env);
 
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1667,7 +1701,18 @@ mod test {
         let voter = Address::generate(&env);
 
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1678,12 +1723,12 @@ mod test {
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
 
         let events = env.events().all();
-        
+
         let has_vote_rsn = events.iter().any(|(_, topics, _)| {
             topics.len() >= 1 && {
                 let first: Result<soroban_sdk::Symbol, _> =
                     topics.get(0).unwrap().try_into_val(&env);
-                first.is_ok() && first.unwrap() == symbol_short!("vote_rsn")
+                first.is_ok() && first.unwrap() == Symbol::new(&env, "VoteCastWithReason")
             }
         });
 
@@ -1705,7 +1750,18 @@ mod test {
         let voter2 = Address::generate(&env);
 
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1751,7 +1807,18 @@ mod test {
 
         // Initialize governor with 50% quorum (50 / 100).
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_id, &timelock, &0, &100, &50, &0, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_id,
+            &timelock,
+            &0,
+            &100,
+            &50,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1784,7 +1851,18 @@ mod test {
 
         // Set threshold to 100
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &100, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &100,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         // Create proposal with multiple targets
         let target1 = Address::generate(&env);
@@ -1807,10 +1885,21 @@ mod test {
         calldatas.push_back(calldata1.clone());
         calldatas.push_back(calldata2.clone());
 
-        let description_hash = env.crypto().sha256(&Bytes::from_slice(&env, b"Multi-target proposal")).into();
+        let description_hash = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, b"Multi-target proposal"))
+            .into();
         let metadata_uri = String::from_str(&env, "ipfs://QmMulti");
 
-        let proposal_id = client.propose(&proposer, &description, &description_hash, &metadata_uri, &targets, &fn_names, &calldatas);
+        let proposal_id = client.propose(
+            &proposer,
+            &description,
+            &description_hash,
+            &metadata_uri,
+            &targets,
+            &fn_names,
+            &calldatas,
+        );
 
         // Verify proposal was created
         assert_eq!(proposal_id, 1);
@@ -1831,7 +1920,18 @@ mod test {
         let timelock = Address::generate(&env);
 
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &100, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &100,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let target = Address::generate(&env);
         let fn_name = Symbol::new(&env, "exec");
@@ -1849,11 +1949,22 @@ mod test {
         calldatas.push_back(calldata1);
         calldatas.push_back(calldata2); // Extra calldata
 
-        let description_hash = env.crypto().sha256(&Bytes::from_slice(&env, b"Mismatched proposal")).into();
+        let description_hash = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, b"Mismatched proposal"))
+            .into();
         let metadata_uri = String::from_str(&env, "ipfs://QmMismatch");
 
         // Should panic with "targets, fn_names, and calldatas length mismatch"
-        client.propose(&proposer, &description, &description_hash, &metadata_uri, &targets, &fn_names, &calldatas);
+        client.propose(
+            &proposer,
+            &description,
+            &description_hash,
+            &metadata_uri,
+            &targets,
+            &fn_names,
+            &calldatas,
+        );
     }
 
     #[test]
@@ -1870,18 +1981,40 @@ mod test {
         let timelock = Address::generate(&env);
 
         let guardian = Address::generate(&env);
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &100, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &100,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let description = String::from_str(&env, "Empty proposal");
         let targets = soroban_sdk::Vec::new(&env);
         let fn_names = soroban_sdk::Vec::new(&env);
         let calldatas = soroban_sdk::Vec::new(&env);
 
-        let description_hash = env.crypto().sha256(&Bytes::from_slice(&env, b"Empty proposal")).into();
+        let description_hash = env
+            .crypto()
+            .sha256(&Bytes::from_slice(&env, b"Empty proposal"))
+            .into();
         let metadata_uri = String::from_str(&env, "ipfs://QmEmpty");
 
         // Should panic with "must have at least one target"
-        client.propose(&proposer, &description, &description_hash, &metadata_uri, &targets, &fn_names, &calldatas);
+        client.propose(
+            &proposer,
+            &description,
+            &description_hash,
+            &metadata_uri,
+            &targets,
+            &fn_names,
+            &calldatas,
+        );
     }
 
     /// Mock oracle contract that returns a fixed price for dynamic quorum tests.
@@ -1908,7 +2041,18 @@ mod test {
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1931,7 +2075,18 @@ mod test {
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1955,7 +2110,18 @@ mod test {
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -1981,7 +2147,18 @@ mod test {
         let timelock = Address::generate(&env);
         let proposer = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -2004,7 +2181,18 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Simple, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Simple,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -2029,7 +2217,18 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Quadratic, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Quadratic,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -2057,7 +2256,18 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &0, &100, &0, &0, &guardian, &VoteType::Extended, &100); // Short grace period
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &100,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &100,
+        ); // Short grace period
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -2095,7 +2305,18 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &0, &100, &0, &0, &guardian, &VoteType::Extended, &100); // Short grace period
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &100,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &100,
+        ); // Short grace period
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -2133,7 +2354,18 @@ mod test {
         let token_b_id = env.register(MockVotesContract, ());
 
         // Initialize governor with a single-token strategy first (standard init).
-        client.initialize(&admin, &token_a_id, &timelock, &100, &1000, &0, &0, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &token_a_id,
+            &timelock,
+            &100,
+            &1000,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         // Build MultiToken strategy: token_a at 1x (10000 bps), token_b at 2x (20000 bps).
         let mut weighted_tokens = soroban_sdk::Vec::new(&env);
@@ -2165,7 +2397,10 @@ mod test {
         client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
         let (votes_for, _, _) = client.proposal_votes(&proposal_id);
-        assert_eq!(votes_for, 3_000_000, "weighted votes should total 3_000_000");
+        assert_eq!(
+            votes_for, 3_000_000,
+            "weighted votes should total 3_000_000"
+        );
     }
 
     #[test]
@@ -2182,7 +2417,18 @@ mod test {
         let proposer = Address::generate(&env);
 
         // 10% static quorum: supply=10_000_000, so static = 1_000_000.
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &10, &0, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &10,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         // Create a proposal to get a proposal_id.
         let proposal_id = propose_dummy(&env, &client, &proposer);
@@ -2237,7 +2483,18 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
@@ -2276,7 +2533,18 @@ mod test {
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
-        client.initialize(&admin, &votes_token_id, &timelock, &100, &1000, &50, &1000, &guardian, &VoteType::Extended, &120_960);
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &100,
+            &1000,
+            &50,
+            &1000,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 

@@ -1,5 +1,5 @@
+mod governance_cancel;
 mod integration;
-mod transitions;
 
 // ── upgrade auth tests ────────────────────────────────────────────────────────
 // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires
@@ -15,12 +15,15 @@ use soroban_sdk::{
 };
 
 fn count_topic(env: &Env, topic_name: &str) -> usize {
+    let topic_symbol = Symbol::new(env, topic_name);
     env.events()
         .all()
         .iter()
         .filter(|(_, topics, _)| {
-            let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
-            first.is_ok() && first.unwrap() == Symbol::new(env, topic_name)
+            topics.len() > 0 && {
+                let first: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(env);
+                first.is_ok() && first.unwrap() == topic_symbol
+            }
         })
         .count()
 }
@@ -117,6 +120,10 @@ fn update_config_rejects_caller_that_is_not_the_contract_address() {
         use_dynamic_quorum: false,
         reflector_oracle: None,
         min_quorum_usd: 0,
+        max_calldata_size: 10_000,
+        proposal_cooldown: 100,
+        max_proposals_per_period: 5,
+        proposal_period_duration: 10_000,
     };
 
     env.mock_auths(&[MockAuth {
@@ -173,6 +180,10 @@ fn update_config_succeeds_with_contract_self_auth() {
         use_dynamic_quorum: false,
         reflector_oracle: None,
         min_quorum_usd: 0,
+        max_calldata_size: 10_000,
+        proposal_cooldown: 100,
+        max_proposals_per_period: 5,
+        proposal_period_duration: 10_000,
     };
 
     client.update_config(&new_settings);
