@@ -155,6 +155,45 @@ export class GovernorClient {
   }
 
   /**
+   * Execute multiple queued proposals in a single transaction.
+   *
+   * The contract validates that every proposal is queued before processing
+   * the batch, then executes them in-order.
+   */
+  async executeBatch(signer: Keypair, proposalIds: bigint[]): Promise<void> {
+    if (proposalIds.length === 0) {
+      throw new Error("executeBatch requires at least one proposal id");
+    }
+
+    const account = await this.server.getAccount(signer.publicKey());
+    const proposalIdsScVal = xdr.ScVal.scvVec(
+      proposalIds.map((id) => nativeToScVal(id, { type: "u64" }))
+    );
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "execute_batch",
+          proposalIdsScVal
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw new Error(`executeBatch failed: ${JSON.stringify(result)}`);
+    }
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
    * Get the current state of a proposal.
    * TODO issue #17: decode all 7 ProposalState variants.
    */

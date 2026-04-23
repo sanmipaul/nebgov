@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
-    Env, String, Symbol,
+    Env, String, Symbol, Vec,
 };
 
 /// Cross-contract interface for the Timelock contract.
@@ -356,6 +356,30 @@ impl GovernorContract {
             .publish((symbol_short!("execute"),), proposal_id);
     }
 
+    /// Execute multiple queued proposals in order.
+    ///
+    /// Performs a full queued-state preflight for every proposal before
+    /// executing any of them, avoiding partial completion in malformed batches.
+    pub fn execute_batch(env: Env, proposal_ids: Vec<u64>) {
+        assert!(!proposal_ids.is_empty(), "empty batch");
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            assert!(
+                Self::state(env.clone(), proposal_id) == ProposalState::Queued,
+                "proposal not queued"
+            );
+        }
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            Self::execute(env.clone(), proposal_id);
+        }
+
+        env.events()
+            .publish((symbol_short!("exbatch"),), proposal_ids);
+    }
+
     /// Cancel a proposal. Only proposer or admin can cancel.
     /// TODO issue #7: enforce cancellation rules, emit event.
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
@@ -489,8 +513,10 @@ impl GovernorContract {
     /// after this in the same proposal's calldata.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         env.current_contract_address().require_auth();
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
-        env.events().publish((symbol_short!("upgrade"),), new_wasm_hash);
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((symbol_short!("upgrade"),), new_wasm_hash);
     }
 
     /// Migrate contract storage after a WASM upgrade.
@@ -519,11 +545,7 @@ mod test {
     /// Shared helper: initialize the governor and return a proposal id using a
     /// dummy target so the existing vote-with-reason tests remain focused on
     /// their specific behaviour without needing a real timelock or target.
-    fn propose_dummy(
-        env: &Env,
-        client: &GovernorContractClient,
-        proposer: &Address,
-    ) -> u64 {
+    fn propose_dummy(env: &Env, client: &GovernorContractClient, proposer: &Address) -> u64 {
         let target = Address::generate(env);
         let fn_name = Symbol::new(env, "noop");
         let calldata = Bytes::new(env);
