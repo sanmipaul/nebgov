@@ -17,7 +17,6 @@ jest.mock("@stellar/stellar-sdk", () => {
   return {
     ...actual,
     scValToNative: mockScValToNative,
-    nativeToScVal: jest.fn(),
     nativeToScVal: mockNativeToScVal,
     SorobanRpc: {
       ...actual.SorobanRpc,
@@ -29,7 +28,6 @@ jest.mock("@stellar/stellar-sdk", () => {
         getTransaction: mockGetTransaction,
       })),
       Api: {
-        isSimulationError: jest.fn((result) => result && result.error !== undefined),
         isSimulationError: mockIsSimulationError,
         GetTransactionStatus: {
           SUCCESS: "SUCCESS",

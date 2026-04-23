@@ -15,7 +15,9 @@ import {
   GovernorSettings,
   GovernorSettingsValidationLimits,
   Proposal,
+  ProposalAction,
   ProposalInput,
+  ProposalSimulationResult,
   ProposalState,
   ProposalVotes,
   VoteSupport,
@@ -112,22 +114,45 @@ export class GovernorClient {
   async propose(
     signer: Keypair,
     description: string,
-    descriptionHash: string,
-    metadataUri: string,
-    targets: string[],
-    fnNames: string[],
-    calldatas: (Buffer | Uint8Array)[],
+    descriptionHashOrTargets: string | string[],
+    metadataUriOrFnNames: string | string[],
+    targetsOrCalldatas: string[] | (Buffer | Uint8Array)[],
+    fnNamesArg?: string[],
+    calldatasArg?: (Buffer | Uint8Array)[],
   ): Promise<bigint> {
+    const legacyCall = Array.isArray(descriptionHashOrTargets);
+    const descriptionHash = legacyCall
+      ? "0".repeat(64)
+      : descriptionHashOrTargets;
+    const metadataUri = legacyCall ? "" : (metadataUriOrFnNames as string);
+    const targets = legacyCall
+      ? descriptionHashOrTargets
+      : (targetsOrCalldatas as string[]);
+    const fnNames = legacyCall ? (metadataUriOrFnNames as string[]) : fnNamesArg;
+    const calldatas = legacyCall
+      ? (targetsOrCalldatas as (Buffer | Uint8Array)[])
+      : calldatasArg;
+
+    if (!fnNames || !calldatas) {
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "targets, fnNames, and calldatas are required",
+      );
+    }
     if (
       targets.length !== fnNames.length ||
       targets.length !== calldatas.length
     ) {
-      throw new Error(
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
         "targets, fnNames, and calldatas must have the same length",
       );
     }
     if (targets.length === 0) {
-      throw new Error("At least one on-chain action is required");
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "At least one on-chain action is required",
+      );
     }
 
     // Convert hex string to BytesN<32>
@@ -285,6 +310,65 @@ export class GovernorClient {
       cpuInsns: ok.cost?.cpuInsns,
       memBytes: ok.cost?.memBytes,
     };
+  }
+
+  /**
+   * Simulate each action in a proposal and aggregate compute hints.
+   */
+  async simulateProposal(
+    actions: ProposalAction[],
+    sourceAccount: string = this.config.governorAddress,
+  ): Promise<ProposalSimulationResult> {
+    try {
+      let computeUnits = 0;
+      const stateChanges: unknown[] = [];
+
+      for (const action of actions) {
+        const target = new Contract(action.target);
+        const op = target.call(
+          action.function,
+          ...action.args.map((arg) => nativeToScVal(arg)),
+        );
+        const result = await this.server.simulateTransaction(
+          new TransactionBuilder(
+            await this.server.getAccount(sourceAccount),
+            { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+          )
+            .addOperation(op)
+            .setTimeout(30)
+            .build(),
+        );
+
+        if (SorobanRpc.Api.isSimulationError(result)) {
+          const err = result as unknown as { error?: string };
+          return {
+            success: false,
+            error: `Simulation failed: ${err.error ?? "unknown"}`,
+          };
+        }
+
+        const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+          result?: { cost?: { cpuInstructions?: number } } | null;
+          cost?: { cpuInstructions?: number; cpuInsns?: string };
+        };
+        if (!success.result) {
+          return { success: false, error: "No simulation result returned" };
+        }
+
+        const cost =
+          success.result.cost?.cpuInstructions ??
+          success.cost?.cpuInstructions ??
+          Number(success.cost?.cpuInsns ?? 0);
+        computeUnits += Number(cost ?? 0);
+      }
+
+      return { success: true, computeUnits, stateChanges };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Simulation failed",
+      };
+    }
   }
 
   /** Resource hints for the full `propose` transaction (simulation only). */

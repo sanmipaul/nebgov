@@ -101,24 +101,6 @@ function toBigInt(value: unknown): bigint | null {
   }
 }
 
-export function parseProposalQueuedEvent(
-  event: SorobanEvent
-): { proposalId: bigint; readyAt: bigint; queueTime?: bigint } | null {
-  if (event.topic[0] !== "ProposalQueued") return null;
-  const raw = event.value;
-  if (!Array.isArray(raw) || raw.length < 2) return null;
-  try {
-    return {
-      proposalId: BigInt(raw[0] as number | bigint | string),
-      readyAt: BigInt(raw[1] as number | bigint | string),
-      // queueTime is optional for backward compatibility
-      queueTime: raw.length >= 3 ? BigInt(raw[2] as number | bigint | string) : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** Decoded `veto` (proposal vetoed from queue) event */
 export interface ProposalVetoedEventData {
   proposalId: bigint;
