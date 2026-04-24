@@ -3,8 +3,8 @@
 mod events;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
+    Bytes, BytesN, Env, String, Symbol, Vec,
 };
 
 /// Governor error codes.
@@ -19,12 +19,24 @@ pub enum GovernorError {
     ProposalRateLimited = 6,
     ContractPaused = 7,
     UnauthorizedPause = 8,
-    EmptyMetadataUri = 9,
-    InvalidVotingDelay = 10,
-    InvalidVotingPeriod = 11,
-    InvalidQuorumNumerator = 12,
-    InvalidProposalThreshold = 13,
-    InvalidGasEstimationState = 14,
+    InvalidVectorLengths = 9,
+    NoTargets = 10,
+    ProposalThresholdNotMet = 11,
+    AlreadyVoted = 12,
+    ZeroVotingPower = 13,
+    ProposalNotSucceeded = 14,
+    ProposalNotQueued = 15,
+    ProposalAlreadyExecuted = 16,
+    MissingOpIds = 17,
+    UnauthorizedGuardian = 18,
+    VetoWindowClosed = 19,
+    ProposalNotFound = 20,
+    TimelockNotSet = 21,
+    GuardianNotSet = 22,
+    TooManyTokens = 23,
+    EmptyMetadataUri = 24,
+    VotesTokenNotSet = 25,
+    PauserNotSet = 26,
 }
 
 /// Cross-contract interface for the Timelock contract.
@@ -274,21 +286,12 @@ pub struct GovernorContract;
 
 #[contractimpl]
 impl GovernorContract {
-    fn validate_settings(env: &Env, settings: &GovernorSettings) {
-        if settings.voting_delay > MAX_VOTING_DELAY {
-            env.panic_with_error(GovernorError::InvalidVotingDelay);
-        }
-        if settings.voting_period < MIN_VOTING_PERIOD {
-            env.panic_with_error(GovernorError::InvalidVotingPeriod);
-        }
-        if settings.quorum_numerator == 0 || settings.quorum_numerator > 100 {
-            env.panic_with_error(GovernorError::InvalidQuorumNumerator);
-        }
-        if settings.proposal_threshold < 0 {
-            env.panic_with_error(GovernorError::InvalidProposalThreshold);
-        }
+    fn must_get_proposal(env: &Env, proposal_id: u64) -> Proposal {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound))
     }
-
     fn emit_proposal_expired_if_needed(env: &Env, proposal: &Proposal) {
         let expired_emitted: bool = env
             .storage()
@@ -412,11 +415,12 @@ impl GovernorContract {
         }
 
         // Validate all vectors have the same length
-        assert!(
-            targets.len() == fn_names.len() && targets.len() == calldatas.len(),
-            "targets, fn_names, and calldatas length mismatch"
-        );
-        assert!(!targets.is_empty(), "must have at least one target");
+        if !(targets.len() == fn_names.len() && targets.len() == calldatas.len()) {
+            env.panic_with_error(GovernorError::InvalidVectorLengths);
+        }
+        if targets.is_empty() {
+            env.panic_with_error(GovernorError::NoTargets);
+        }
 
         // Validate calldata size limits (Issue #186)
         let max_calldata_size: u32 = env
@@ -486,10 +490,9 @@ impl GovernorContract {
             .get(&DataKey::ProposalThreshold)
             .unwrap_or(0);
 
-        assert!(
-            proposer_votes >= threshold,
-            "proposer votes below threshold"
-        );
+        if proposer_votes < threshold {
+            env.panic_with_error(GovernorError::ProposalThresholdNotMet);
+        }
 
         let count: u64 = env
             .storage()
@@ -544,6 +547,22 @@ impl GovernorContract {
         env.storage().persistent().set(
             &DataKey::ProposalsInPeriod(proposer.clone(), current_period),
             &(proposals_in_period + 1),
+        );
+
+        // Emit ProposalCreated event with all proposal fields
+        env.events().publish(
+            (symbol_short!("prop_crtd"), proposer.clone()),
+            (
+                proposal_id,
+                description,
+                description_hash,
+                metadata_uri,
+                targets,
+                fn_names,
+                calldatas,
+                current + voting_delay,
+                current + voting_delay + voting_period,
+            ),
         );
 
         events::emit_proposal_created(&env, &proposal);
@@ -609,19 +628,19 @@ impl GovernorContract {
             .persistent()
             .get(&DataKey::HasVoted(proposal_id, voter.clone()))
             .unwrap_or(false);
-        assert!(!voted, "already voted");
+        if voted {
+            env.panic_with_error(GovernorError::AlreadyVoted);
+        }
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+        let mut proposal = Self::must_get_proposal(&env, proposal_id);
 
         // Look up the voter's snapshot voting power at the proposal's start ledger
         // using the active voting strategy (single token or multi-token weighted).
         let raw_weight: i128 = Self::compute_votes(&env, &voter, &proposal.start_ledger);
 
-        assert!(raw_weight > 0, "zero voting power");
+        if raw_weight <= 0 {
+            env.panic_with_error(GovernorError::ZeroVotingPower);
+        }
 
         // Apply vote type weighting
         let vote_type: VoteType = env
@@ -677,17 +696,17 @@ impl GovernorContract {
             .persistent()
             .get(&DataKey::HasVoted(proposal_id, voter.clone()))
             .unwrap_or(false);
-        assert!(!voted, "already voted");
+        if voted {
+            env.panic_with_error(GovernorError::AlreadyVoted);
+        }
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+        let mut proposal = Self::must_get_proposal(&env, proposal_id);
 
         // Look up the voter's snapshot voting power at the proposal's start ledger
         let raw_weight: i128 = Self::compute_votes(&env, &voter, &proposal.start_ledger);
-        assert!(raw_weight > 0, "zero voting power");
+        if raw_weight <= 0 {
+            env.panic_with_error(GovernorError::ZeroVotingPower);
+        }
 
         // Apply vote type weighting
         let vote_type: VoteType = env
@@ -754,26 +773,23 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::ProposalExpired);
         }
 
-        assert!(
-            proposal_state == ProposalState::Succeeded,
-            "proposal not succeeded"
-        );
+        if proposal_state != ProposalState::Succeeded {
+            env.panic_with_error(GovernorError::ProposalNotSucceeded);
+        }
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+        let mut proposal = Self::must_get_proposal(&env, proposal_id);
 
         let timelock_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::Timelock)
-            .expect("timelock not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::TimelockNotSet));
         let gov_addr = env.current_contract_address();
         let timelock = TimelockClient::new(&env, &timelock_addr);
 
-        assert!(!proposal.targets.is_empty(), "no targets in proposal");
+        if proposal.targets.is_empty() {
+            env.panic_with_error(GovernorError::NoTargets);
+        }
 
         // Use the timelock's own minimum delay to guarantee the configured
         // execution window is respected.
@@ -831,31 +847,27 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::ContractPaused);
         }
 
-        assert!(
-            Self::state(env.clone(), proposal_id) == ProposalState::Queued,
-            "proposal not queued"
-        );
+        if Self::state(env.clone(), proposal_id) != ProposalState::Queued {
+            env.panic_with_error(GovernorError::ProposalNotQueued);
+        }
 
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+        let mut proposal = Self::must_get_proposal(&env, proposal_id);
 
-        assert!(!proposal.executed, "proposal already executed");
+        if proposal.executed {
+            env.panic_with_error(GovernorError::ProposalAlreadyExecuted);
+        }
 
         let timelock_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::Timelock)
-            .expect("timelock not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::TimelockNotSet));
         let gov_addr = env.current_contract_address();
 
         // Execute all timelock operations scheduled by queue().
-        assert!(
-            !proposal.op_ids.is_empty(),
-            "no op ids — call queue() first"
-        );
+        if proposal.op_ids.is_empty() {
+            env.panic_with_error(GovernorError::MissingOpIds);
+        }
 
         let timelock = TimelockClient::new(&env, &timelock_addr);
         for i in 0..proposal.op_ids.len() {
@@ -901,18 +913,14 @@ impl GovernorContract {
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
 
-        let proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+        let proposal = Self::must_get_proposal(&env, proposal_id);
 
         let state = Self::state(env.clone(), proposal_id);
         let guardian: Address = env
             .storage()
             .instance()
             .get(&DataKey::Guardian)
-            .expect("guardian not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::GuardianNotSet));
 
         let can_cancel = (caller == proposal.proposer && state == ProposalState::Pending)
             || (caller == guardian && state == ProposalState::Active);
@@ -990,59 +998,50 @@ impl GovernorContract {
     pub fn cancel_queued(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
 
-        let proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+        let proposal = Self::must_get_proposal(&env, proposal_id);
 
         // Verify the proposal is queued
-        assert!(
-            proposal.queued && !proposal.cancelled,
-            "proposal not queued"
-        );
+        if !(proposal.queued && !proposal.cancelled) {
+            env.panic_with_error(GovernorError::ProposalNotQueued);
+        }
 
         let guardian: Address = env
             .storage()
             .instance()
             .get(&DataKey::Guardian)
-            .expect("guardian not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::GuardianNotSet));
 
         // Only guardian can cancel queued proposals
-        assert!(
-            caller == guardian,
-            "only guardian can cancel queued proposals"
-        );
+        if caller != guardian {
+            env.panic_with_error(GovernorError::UnauthorizedGuardian);
+        }
 
         // Get the queue time for veto window check
         let queue_time: u32 = env
             .storage()
             .persistent()
             .get(&DataKey::QueueTime(proposal_id))
-            .expect("queue_time not found");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotQueued));
 
         // Get the timelock delay
         let timelock_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::Timelock)
-            .expect("timelock not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::TimelockNotSet));
         let timelock = TimelockClient::new(&env, &timelock_addr);
         let delay = timelock.min_delay();
 
         // Check if we're still in the veto window
         let current_ledger = env.ledger().sequence();
-        let veto_window_end = queue_time + (delay / 10u64) as u32; // Assuming ~10 seconds per ledger, roughly 1 ledger per second
-
         // For simplicity, use delay directly as ledger count (adjusting for typical Soroban block times)
         // The veto window should close after timelock_delay seconds
         // Conversion: assume timelock delay is in seconds and we need ledger conversion
         let veto_window_end_ledger = queue_time + ((delay / 10) as u32); // Roughly 1 ledger per 10 seconds
 
-        assert!(
-            current_ledger < veto_window_end_ledger,
-            "veto window closed"
-        );
+        if current_ledger >= veto_window_end_ledger {
+            env.panic_with_error(GovernorError::VetoWindowClosed);
+        }
 
         // Cancel the proposal
         let mut proposal_mut = proposal;
@@ -1071,11 +1070,11 @@ impl GovernorContract {
     /// least one For vote, more For votes than Against votes, and meets the
     /// quorum requirement (votes_for >= quorum).
     pub fn state(env: Env, proposal_id: u64) -> ProposalState {
-        let proposal: Proposal = env
+        let proposal = env
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound));
 
         if proposal.cancelled {
             return ProposalState::Cancelled;
@@ -1133,13 +1132,13 @@ impl GovernorContract {
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound));
 
         let votes_token_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::VotesToken)
-            .expect("votes token not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::VotesTokenNotSet));
 
         let quorum_numerator: u32 = env
             .storage()
@@ -1197,7 +1196,7 @@ impl GovernorContract {
             .storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound));
         (
             proposal.votes_for,
             proposal.votes_against,
@@ -1260,7 +1259,7 @@ impl GovernorContract {
                 .storage()
                 .instance()
                 .get(&DataKey::Guardian)
-                .expect("guardian not set"),
+                .unwrap_or_else(|| env.panic_with_error(GovernorError::GuardianNotSet)),
             vote_type: env
                 .storage()
                 .instance()
@@ -1414,7 +1413,9 @@ impl GovernorContract {
     pub fn set_voting_strategy(env: Env, strategy: VotingStrategy) {
         env.current_contract_address().require_auth();
         if let VotingStrategy::MultiToken(ref tokens) = strategy {
-            assert!(tokens.len() <= 5, "max 5 tokens in MultiToken strategy");
+            if tokens.len() > 5 {
+                env.panic_with_error(GovernorError::TooManyTokens);
+            }
         }
         env.storage()
             .instance()
@@ -1457,7 +1458,7 @@ impl GovernorContract {
                     .storage()
                     .instance()
                     .get(&DataKey::VotesToken)
-                    .expect("votes token not set");
+                    .unwrap_or_else(|| env.panic_with_error(GovernorError::VotesTokenNotSet));
                 VotesClient::new(env, &votes_token).get_past_votes(voter, ledger)
             }
             VotingStrategy::MultiToken(tokens) => {
@@ -1484,7 +1485,7 @@ impl GovernorContract {
                     .storage()
                     .instance()
                     .get(&DataKey::VotesToken)
-                    .expect("votes token not set");
+                    .unwrap_or_else(|| env.panic_with_error(GovernorError::VotesTokenNotSet));
                 VotesClient::new(env, &votes_token).get_votes(proposer)
             }
             VotingStrategy::MultiToken(tokens) => {
@@ -1559,7 +1560,7 @@ impl GovernorContract {
             .storage()
             .instance()
             .get(&DataKey::Pauser)
-            .expect("pauser not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::PauserNotSet));
 
         if caller != pauser {
             env.panic_with_error(GovernorError::UnauthorizedPause);
@@ -1580,10 +1581,8 @@ impl GovernorContract {
 
         env.storage().instance().set(&DataKey::IsPaused, &false);
 
-        env.events().publish(
-            (Symbol::new(&env, "ContractUnpaused"),),
-            env.ledger().sequence(),
-        );
+        env.events()
+            .publish((symbol_short!("unpaused"),), env.ledger().sequence());
     }
 
     /// Check if the contract is currently paused.
@@ -1599,7 +1598,7 @@ impl GovernorContract {
         env.storage()
             .instance()
             .get(&DataKey::Pauser)
-            .expect("pauser not set")
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::PauserNotSet))
     }
 
     /// Update the pauser address (governance-gated).
@@ -1610,7 +1609,7 @@ impl GovernorContract {
             .storage()
             .instance()
             .get(&DataKey::Pauser)
-            .expect("pauser not set");
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::PauserNotSet));
 
         env.storage().instance().set(&DataKey::Pauser, &new_pauser);
 

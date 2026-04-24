@@ -20,50 +20,89 @@
 export enum GovernorErrorCode {
   // On-chain contract errors (match contracts/governor/src/lib.rs)
   UnauthorizedCancel = 1,
-  InvalidSupport     = 2,
-  ProposalExpired    = 3,
-  CalldataTooLarge   = 4,
-  InvalidCalldata    = 5,
+  InvalidSupport = 2,
+  ProposalExpired = 3,
+  CalldataTooLarge = 4,
+  InvalidCalldata = 5,
   ProposalRateLimited = 6,
-  ContractPaused     = 7,
-  UnauthorizedPause  = 8,
-  EmptyMetadataUri   = 9,
-  InvalidVotingDelay = 10,
-  InvalidVotingPeriod = 11,
-  InvalidQuorumNumerator = 12,
-  InvalidProposalThreshold = 13,
-  InvalidGasEstimationState = 14,
+  ContractPaused = 7,
+  UnauthorizedPause = 8,
+  InvalidVectorLengths = 9,
+  NoTargets = 10,
+  ProposalThresholdNotMet = 11,
+  AlreadyVoted = 12,
+  ZeroVotingPower = 13,
+  ProposalNotSucceeded = 14,
+  ProposalNotQueued = 15,
+  ProposalAlreadyExecuted = 16,
+  MissingOpIds = 17,
+  UnauthorizedGuardian = 18,
+  VetoWindowClosed = 19,
+  ProposalNotFound = 20,
+  TimelockNotSet = 21,
+  GuardianNotSet = 22,
+  TooManyTokens = 23,
+  EmptyMetadataUri = 24,
+  VotesTokenNotSet = 25,
+  PauserNotSet = 26,
 
   // SDK-level codes
-  ProposalNotFound    = 100,
-  SimulationFailed    = 101,
-  TransactionFailed   = 102,
-  TransactionTimeout  = 103,
-  InvalidArguments    = 104,
-  UnknownState        = 105,
+  RpcNotFound = 100,
+  SimulationFailed = 101,
+  TransactionFailed = 102,
+  TransactionTimeout = 103,
+  InvalidArguments = 104,
+  UnknownState = 105,
 }
 
 const GOVERNOR_MESSAGES: Record<GovernorErrorCode, string> = {
-  [GovernorErrorCode.UnauthorizedCancel]: "Unauthorized: only the proposer or guardian can cancel this proposal",
-  [GovernorErrorCode.InvalidSupport]:     "Invalid vote support: this governance type does not allow abstain votes",
-  [GovernorErrorCode.ProposalExpired]:    "Proposal has expired and can no longer be acted upon",
-  [GovernorErrorCode.CalldataTooLarge]:   "Proposal calldata exceeds the configured size limit",
-  [GovernorErrorCode.InvalidCalldata]:    "Proposal calldata is invalid",
-  [GovernorErrorCode.ProposalRateLimited]: "Proposal creation is rate limited",
-  [GovernorErrorCode.ContractPaused]:     "Governor contract is paused",
-  [GovernorErrorCode.UnauthorizedPause]:  "Unauthorized: caller cannot pause or unpause the governor",
-  [GovernorErrorCode.EmptyMetadataUri]:   "Proposal metadata URI cannot be empty",
-  [GovernorErrorCode.InvalidVotingDelay]: "Invalid voting delay",
-  [GovernorErrorCode.InvalidVotingPeriod]: "Invalid voting period",
-  [GovernorErrorCode.InvalidQuorumNumerator]: "Invalid quorum numerator",
-  [GovernorErrorCode.InvalidProposalThreshold]: "Invalid proposal threshold",
-  [GovernorErrorCode.InvalidGasEstimationState]: "Cannot estimate gas for this proposal state",
-  [GovernorErrorCode.ProposalNotFound]:   "Proposal not found",
-  [GovernorErrorCode.SimulationFailed]:   "Simulation failed",
-  [GovernorErrorCode.TransactionFailed]:  "Transaction failed",
+  [GovernorErrorCode.UnauthorizedCancel]:
+    "Unauthorized: only the proposer or guardian can cancel this proposal",
+  [GovernorErrorCode.InvalidSupport]:
+    "Invalid vote support: this governance type does not allow abstain votes",
+  [GovernorErrorCode.ProposalExpired]:
+    "Proposal has expired and can no longer be acted upon",
+  [GovernorErrorCode.CalldataTooLarge]:
+    "Calldata exceeds the maximum allowed size",
+  [GovernorErrorCode.InvalidCalldata]: "Calldata is invalid or malformed",
+  [GovernorErrorCode.ProposalRateLimited]:
+    "Proposal creation is rate-limited for this proposer",
+  [GovernorErrorCode.ContractPaused]: "Contract is paused",
+  [GovernorErrorCode.UnauthorizedPause]:
+    "Only the pauser may pause the contract",
+  [GovernorErrorCode.InvalidVectorLengths]:
+    "Targets, function names, and calldatas must have the same length",
+  [GovernorErrorCode.NoTargets]: "At least one target is required",
+  [GovernorErrorCode.ProposalThresholdNotMet]:
+    "Proposer does not meet the proposal threshold",
+  [GovernorErrorCode.AlreadyVoted]: "Voter has already voted on this proposal",
+  [GovernorErrorCode.ZeroVotingPower]: "Account has zero voting power",
+  [GovernorErrorCode.ProposalNotSucceeded]:
+    "Proposal is not in Succeeded state",
+  [GovernorErrorCode.ProposalNotQueued]: "Proposal is not queued",
+  [GovernorErrorCode.ProposalAlreadyExecuted]:
+    "Proposal has already been executed",
+  [GovernorErrorCode.MissingOpIds]:
+    "Missing timelock operation IDs; queue() must be called first",
+  [GovernorErrorCode.UnauthorizedGuardian]:
+    "Only the guardian may perform this action",
+  [GovernorErrorCode.VetoWindowClosed]: "Veto window has closed",
+  [GovernorErrorCode.ProposalNotFound]: "Proposal not found",
+  [GovernorErrorCode.TimelockNotSet]: "Timelock address is not configured",
+  [GovernorErrorCode.GuardianNotSet]: "Guardian address is not configured",
+  [GovernorErrorCode.TooManyTokens]:
+    "Multi-token strategy supports at most 5 tokens",
+  [GovernorErrorCode.EmptyMetadataUri]: "Metadata URI cannot be empty",
+  [GovernorErrorCode.VotesTokenNotSet]: "Votes token address is not configured",
+  [GovernorErrorCode.PauserNotSet]: "Pauser address is not configured",
+
+  // SDK-level codes
+  [GovernorErrorCode.RpcNotFound]: "Proposal not found",
+  [GovernorErrorCode.SimulationFailed]: "Simulation failed",
+  [GovernorErrorCode.TransactionFailed]: "Transaction failed",
   [GovernorErrorCode.TransactionTimeout]: "Transaction timed out",
-  [GovernorErrorCode.InvalidArguments]:   "Invalid arguments",
-  [GovernorErrorCode.UnknownState]:       "Unknown proposal state",
+  [GovernorErrorCode.InvalidArguments]: "Invalid arguments",
+  [GovernorErrorCode.UnknownState]: "Unknown proposal state",
 };
 
 export class GovernorError extends Error {
@@ -72,7 +111,7 @@ export class GovernorError extends Error {
   constructor(
     public readonly code: GovernorErrorCode,
     message: string,
-    public readonly cause?: unknown
+    public readonly cause?: unknown,
   ) {
     super(message);
     Object.setPrototypeOf(this, GovernorError.prototype);
@@ -88,25 +127,28 @@ export class GovernorError extends Error {
  */
 export enum TimelockErrorCode {
   // On-chain contract errors (match contracts/timelock/src/lib.rs)
-  PredecessorNotDone  = 1,
+  PredecessorNotDone = 1,
   PredecessorNotFound = 2,
-  OperationExpired    = 3,
+  OperationExpired = 3,
 
   // SDK-level codes
-  SimulationFailed   = 100,
-  TransactionFailed  = 101,
+  SimulationFailed = 100,
+  TransactionFailed = 101,
   TransactionTimeout = 102,
   MissingReturnValue = 103,
 }
 
 const TIMELOCK_MESSAGES: Record<TimelockErrorCode, string> = {
-  [TimelockErrorCode.PredecessorNotDone]:  "Cannot execute: predecessor operation has not been executed yet",
-  [TimelockErrorCode.PredecessorNotFound]: "Cannot schedule: the specified predecessor operation does not exist",
-  [TimelockErrorCode.OperationExpired]:    "Operation has expired and can no longer be executed",
-  [TimelockErrorCode.SimulationFailed]:    "Simulation failed",
-  [TimelockErrorCode.TransactionFailed]:   "Transaction failed",
-  [TimelockErrorCode.TransactionTimeout]:  "Transaction timed out",
-  [TimelockErrorCode.MissingReturnValue]:  "No return value from contract",
+  [TimelockErrorCode.PredecessorNotDone]:
+    "Cannot execute: predecessor operation has not been executed yet",
+  [TimelockErrorCode.PredecessorNotFound]:
+    "Cannot schedule: the specified predecessor operation does not exist",
+  [TimelockErrorCode.OperationExpired]:
+    "Operation has expired and can no longer be executed",
+  [TimelockErrorCode.SimulationFailed]: "Simulation failed",
+  [TimelockErrorCode.TransactionFailed]: "Transaction failed",
+  [TimelockErrorCode.TransactionTimeout]: "Transaction timed out",
+  [TimelockErrorCode.MissingReturnValue]: "No return value from contract",
 };
 
 export class TimelockError extends Error {
@@ -115,7 +157,7 @@ export class TimelockError extends Error {
   constructor(
     public readonly code: TimelockErrorCode,
     message: string,
-    public readonly cause?: unknown
+    public readonly cause?: unknown,
   ) {
     super(message);
     Object.setPrototypeOf(this, TimelockError.prototype);
@@ -131,19 +173,19 @@ export class TimelockError extends Error {
  * codes here are SDK-level.
  */
 export enum VotesErrorCode {
-  SimulationFailed   = 100,
-  TransactionFailed  = 101,
+  SimulationFailed = 100,
+  TransactionFailed = 101,
   TransactionTimeout = 102,
-  DelegationFailed   = 103,
-  EventScanFailed    = 104,
+  DelegationFailed = 103,
+  EventScanFailed = 104,
 }
 
 const VOTES_MESSAGES: Record<VotesErrorCode, string> = {
-  [VotesErrorCode.SimulationFailed]:   "Simulation failed",
-  [VotesErrorCode.TransactionFailed]:  "Transaction failed",
+  [VotesErrorCode.SimulationFailed]: "Simulation failed",
+  [VotesErrorCode.TransactionFailed]: "Transaction failed",
   [VotesErrorCode.TransactionTimeout]: "Transaction timed out",
-  [VotesErrorCode.DelegationFailed]:   "Delegation transaction failed",
-  [VotesErrorCode.EventScanFailed]:    "Failed to scan delegation events",
+  [VotesErrorCode.DelegationFailed]: "Delegation transaction failed",
+  [VotesErrorCode.EventScanFailed]: "Failed to scan delegation events",
 };
 
 export class VotesError extends Error {
@@ -152,7 +194,7 @@ export class VotesError extends Error {
   constructor(
     public readonly code: VotesErrorCode,
     message: string,
-    public readonly cause?: unknown
+    public readonly cause?: unknown,
   ) {
     super(message);
     Object.setPrototypeOf(this, VotesError.prototype);
@@ -203,7 +245,7 @@ export function extractContractErrorCode(raw: SorobanRpcError): number | null {
  */
 export function parseGovernorError(
   raw: SorobanRpcError,
-  cause?: unknown
+  cause?: unknown,
 ): GovernorError {
   const contractCode = extractContractErrorCode(raw);
   if (contractCode !== null) {
@@ -217,14 +259,14 @@ export function parseGovernorError(
     return new GovernorError(
       GovernorErrorCode.TransactionFailed,
       `${GOVERNOR_MESSAGES[GovernorErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
-      cause
+      cause,
     );
   }
 
   return new GovernorError(
     GovernorErrorCode.SimulationFailed,
     `${GOVERNOR_MESSAGES[GovernorErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
-    cause
+    cause,
   );
 }
 
@@ -233,7 +275,7 @@ export function parseGovernorError(
  */
 export function parseTimelockError(
   raw: SorobanRpcError,
-  cause?: unknown
+  cause?: unknown,
 ): TimelockError {
   const contractCode = extractContractErrorCode(raw);
   if (contractCode !== null) {
@@ -247,14 +289,14 @@ export function parseTimelockError(
     return new TimelockError(
       TimelockErrorCode.TransactionFailed,
       `${TIMELOCK_MESSAGES[TimelockErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
-      cause
+      cause,
     );
   }
 
   return new TimelockError(
     TimelockErrorCode.SimulationFailed,
     `${TIMELOCK_MESSAGES[TimelockErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
-    cause
+    cause,
   );
 }
 
@@ -271,21 +313,19 @@ export enum TreasuryErrorCode {
   DailyLimitExceeded     = 2,
 
   // SDK-level codes
-  SimulationFailed   = 100,
-  TransactionFailed  = 101,
+  SimulationFailed = 100,
+  TransactionFailed = 101,
   TransactionTimeout = 102,
   MissingReturnValue = 103,
-  InvalidArguments   = 104,
+  InvalidArguments = 104,
 }
 
 const TREASURY_MESSAGES: Record<TreasuryErrorCode, string> = {
-  [TreasuryErrorCode.SingleTransferExceeded]: "Proposed transfer exceeds maximum allowed per single transfer",
-  [TreasuryErrorCode.DailyLimitExceeded]:     "Proposed transfer would exceed daily spending limit",
-  [TreasuryErrorCode.SimulationFailed]:   "Simulation failed",
-  [TreasuryErrorCode.TransactionFailed]:  "Transaction failed",
+  [TreasuryErrorCode.SimulationFailed]: "Simulation failed",
+  [TreasuryErrorCode.TransactionFailed]: "Transaction failed",
   [TreasuryErrorCode.TransactionTimeout]: "Transaction timed out",
   [TreasuryErrorCode.MissingReturnValue]: "No return value from contract",
-  [TreasuryErrorCode.InvalidArguments]:   "Invalid arguments",
+  [TreasuryErrorCode.InvalidArguments]: "Invalid arguments",
 };
 
 export class TreasuryError extends Error {
@@ -294,7 +334,7 @@ export class TreasuryError extends Error {
   constructor(
     public readonly code: TreasuryErrorCode,
     message: string,
-    public readonly cause?: unknown
+    public readonly cause?: unknown,
   ) {
     super(message);
     Object.setPrototypeOf(this, TreasuryError.prototype);
@@ -306,7 +346,7 @@ export class TreasuryError extends Error {
  */
 export function parseTreasuryError(
   raw: SorobanRpcError,
-  cause?: unknown
+  cause?: unknown,
 ): TreasuryError {
   const contractCode = extractContractErrorCode(raw);
   if (contractCode !== null) {
@@ -320,14 +360,14 @@ export function parseTreasuryError(
     return new TreasuryError(
       TreasuryErrorCode.TransactionFailed,
       `${TREASURY_MESSAGES[TreasuryErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
-      cause
+      cause,
     );
   }
 
   return new TreasuryError(
     TreasuryErrorCode.SimulationFailed,
     `${TREASURY_MESSAGES[TreasuryErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
-    cause
+    cause,
   );
 }
 
@@ -336,19 +376,19 @@ export function parseTreasuryError(
  */
 export function parseVotesError(
   raw: SorobanRpcError,
-  cause?: unknown
+  cause?: unknown,
 ): VotesError {
   if (raw.status === "ERROR") {
     return new VotesError(
       VotesErrorCode.TransactionFailed,
       `${VOTES_MESSAGES[VotesErrorCode.TransactionFailed]}: ${raw.error ?? "unknown"}`,
-      cause
+      cause,
     );
   }
 
   return new VotesError(
     VotesErrorCode.SimulationFailed,
     `${VOTES_MESSAGES[VotesErrorCode.SimulationFailed]}: ${raw.error ?? "unknown"}`,
-    cause
+    cause,
   );
 }
