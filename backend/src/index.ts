@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
 import competitionsRouter from "./routes/competitions";
 import leaderboardRouter from "./routes/leaderboard";
+import authRouter from "./routes/auth";
+import notificationsRouter from "./routes/notifications";
 
 dotenv.config();
 
@@ -48,11 +50,13 @@ app.get("/health", (_req, res) => {
 app.use(globalLimiter);
 
 // Routes
+app.use("/auth", authRouter);
 app.use("/competitions", competitionsRouter);
 app.post("/competitions/:id/join", joinLimiter);
 app.post("/competitions/:id/leave", joinLimiter);
 app.use("/leaderboard/history", leaderboardLimiter);
 app.use("/leaderboard", leaderboardRouter);
+app.use("/notifications", notificationsRouter);
 
 // Error handling
 app.use(
