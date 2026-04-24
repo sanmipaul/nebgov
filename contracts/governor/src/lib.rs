@@ -1707,10 +1707,7 @@ impl GovernorContract {
 
         env.storage().instance().set(&DataKey::IsPaused, &true);
 
-        env.events().publish(
-            (Symbol::new(&env, "ContractPaused"),),
-            (caller, env.ledger().sequence()),
-        );
+        events::emit_paused(&env, &caller);
     }
 
     /// Unpause the contract to resume normal operations.
@@ -1720,8 +1717,7 @@ impl GovernorContract {
 
         env.storage().instance().set(&DataKey::IsPaused, &false);
 
-        env.events()
-            .publish((symbol_short!("unpaused"),), env.ledger().sequence());
+        events::emit_unpaused(&env);
     }
 
     /// Check if the contract is currently paused.
