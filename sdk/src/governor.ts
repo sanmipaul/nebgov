@@ -21,6 +21,7 @@ import {
   ProposalState,
   ProposalVotes,
   VoteSupport,
+  VoteType,
   Network,
   UnknownProposalStateError,
 } from "./types";
@@ -270,6 +271,59 @@ export class GovernorClient {
     const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
       .result?.retval;
     return raw ? BigInt(scValToNative(raw) as number | bigint | string) : 0n;
+  }
+
+  /** Read the full governor settings struct via `get_settings()`. */
+  async getSettings(
+    sourceAccount: string = this.config.governorAddress,
+  ): Promise<GovernorSettings> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(sourceAccount), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call("get_settings"))
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation error: ${result.error}`);
+    }
+
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    if (!raw) throw new Error("No settings return value");
+
+    const native = scValToNative(raw) as Record<string, unknown>;
+    const voteTypeRaw = native.vote_type;
+    const voteTypeValue = Array.isArray(voteTypeRaw)
+      ? String(voteTypeRaw[0] ?? "")
+      : String(voteTypeRaw ?? "");
+    const voteType =
+      voteTypeValue === VoteType.Simple ||
+      voteTypeValue === VoteType.Quadratic
+        ? (voteTypeValue as VoteType)
+        : VoteType.Extended;
+
+    return {
+      votingDelay: Number(native.voting_delay ?? 0),
+      votingPeriod: Number(native.voting_period ?? 0),
+      quorumNumerator: Number(native.quorum_numerator ?? 0),
+      proposalThreshold: toBigInt(native.proposal_threshold),
+      guardian: String(native.guardian ?? ""),
+      voteType,
+      proposalGracePeriod: Number(native.proposal_grace_period ?? 0),
+      useDynamicQuorum: Boolean(native.use_dynamic_quorum ?? false),
+      reflectorOracle: native.reflector_oracle
+        ? String(native.reflector_oracle)
+        : null,
+      minQuorumUsd: toBigInt(native.min_quorum_usd),
+      maxCalldataSize: Number(native.max_calldata_size ?? 10_000),
+      proposalCooldown: Number(native.proposal_cooldown ?? 100),
+      maxProposalsPerPeriod: Number(native.max_proposals_per_period ?? 5),
+      proposalPeriodDuration: Number(native.proposal_period_duration ?? 10_000),
+    };
   }
 
   /**

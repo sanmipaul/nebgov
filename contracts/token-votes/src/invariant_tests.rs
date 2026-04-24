@@ -106,7 +106,7 @@ mod invariant_tests {
             let delegatee = Address::generate(&env);
 
             // Collect (ledger, expected_votes) pairs as delegations happen.
-            let mut snapshots: std::vec::Vec<(u32, i128)> = std::vec::Vec::new();
+            let mut snapshots = soroban_sdk::Vec::new(&env);
             let mut cumulative: i128 = 0;
 
             for balance in &balances {
@@ -115,16 +115,17 @@ mod invariant_tests {
                 let snap_ledger = env.ledger().sequence();
                 client.delegate(&delegator, &delegatee);
                 cumulative += balance;
-                snapshots.push((snap_ledger, cumulative));
+                snapshots.push_back((snap_ledger, cumulative));
                 env.ledger().with_mut(|l| l.sequence_number += 1);
             }
 
             // Re-query every snapshot after all operations — must match recorded value.
-            for (ledger, expected) in &snapshots {
-                let actual = client.get_past_votes(&delegatee, ledger);
+            for i in 0..snapshots.len() {
+                let (ledger, expected) = snapshots.get(i).unwrap();
+                let actual = client.get_past_votes(&delegatee, &ledger);
                 prop_assert_eq!(
                     actual,
-                    *expected,
+                    expected,
                     "Snapshot at ledger {} must be immutable",
                     ledger
                 );

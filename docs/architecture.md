@@ -2,6 +2,17 @@
 
 NebGov is a modular on-chain governance framework for Soroban. It is composed of five independent smart contracts that work together to provide a full governance lifecycle.
 
+## Table of Contents
+
+- [Contract Interaction Flow](#contract-interaction-flow)
+- [Contracts](#contracts)
+- [SDK](#sdk)
+- [Frontend](#frontend)
+- [Treasury Flows](./treasury.md)
+- [Contract Upgrade Mechanism](#contract-upgrade-mechanism)
+- [Security Considerations](#security-considerations)
+- [Architecture Decision Records](#architecture-decision-records)
+
 ## Contract Interaction Flow
 
 ```
@@ -77,6 +88,7 @@ Pages:
 - `/propose` — Create proposal
 - `/proposal/[id]` — Proposal detail + voting
 - `/treasury` — Treasury balances + pending transactions
+- `/settings` — Build governance parameter update proposals
 
 ## Contract Upgrade Mechanism
 

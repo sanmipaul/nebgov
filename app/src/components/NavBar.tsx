@@ -18,6 +18,7 @@ import {
   Sun,
   Moon,
   Bell,
+  Settings,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import toast from "react-hot-toast";
@@ -28,6 +29,7 @@ const NAV_LINKS = [
   { name: "Delegates", href: "/delegates", icon: Users },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Treasury", href: "/treasury", icon: Wallet2 },
+  { name: "Settings", href: "/settings", icon: Settings },
 ];
 
 export function NavBar() {

@@ -14,3 +14,5 @@ ADRs document significant design decisions, the context behind them, alternative
 | [ADR-004](./adr-004-binary-search-voting.md) | Binary search for historical voting power | Accepted |
 | [ADR-005](./adr-005-ed25519-delegation.md) | Ed25519 signatures for delegation-by-sig | Accepted |
 | [ADR-006](./adr-006-self-governed-upgrades.md) | Governor upgrade auth is the contract itself | Accepted |
+| [ADR-007](./adr-007-wrapper-withdrawal-locking.md) | Wrapper withdrawal locking for active voters | Accepted |
+| [ADR-008](./adr-008-treasury-execution-surface.md) | Treasury execution surface and authorization split | Accepted |
