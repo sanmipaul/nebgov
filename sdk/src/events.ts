@@ -1,5 +1,5 @@
 import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
-import { GovernorSettings, Network } from "./types";
+import { GovernorSettings, Network, VoteType } from "./types";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -101,24 +101,6 @@ function toBigInt(value: unknown): bigint | null {
   }
 }
 
-export function parseProposalQueuedEvent(
-  event: SorobanEvent
-): { proposalId: bigint; readyAt: bigint; queueTime?: bigint } | null {
-  if (event.topic[0] !== "ProposalQueued") return null;
-  const raw = event.value;
-  if (!Array.isArray(raw) || raw.length < 2) return null;
-  try {
-    return {
-      proposalId: BigInt(raw[0] as number | bigint | string),
-      readyAt: BigInt(raw[1] as number | bigint | string),
-      // queueTime is optional for backward compatibility
-      queueTime: raw.length >= 3 ? BigInt(raw[2] as number | bigint | string) : undefined,
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** Decoded `veto` (proposal vetoed from queue) event */
 export interface ProposalVetoedEventData {
   proposalId: bigint;
@@ -140,6 +122,9 @@ export function parseProposalVetoedEvent(
     };
   } catch {
     return null;
+  }
+}
+
 function toNumber(value: unknown): number | null {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
@@ -157,12 +142,14 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
   const votingPeriod = toNumber(value.voting_period);
   const quorumNumerator = toNumber(value.quorum_numerator);
   const proposalThreshold = toBigInt(value.proposal_threshold);
+  const proposalGracePeriod = toNumber(value.proposal_grace_period);
 
   if (
     votingDelay === null ||
     votingPeriod === null ||
     quorumNumerator === null ||
-    proposalThreshold === null
+    proposalThreshold === null ||
+    proposalGracePeriod === null
   ) {
     return null;
   }
@@ -172,6 +159,19 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
     votingPeriod,
     quorumNumerator,
     proposalThreshold,
+    guardian: String(value.guardian ?? ""),
+    voteType: VoteType.Extended,
+    proposalGracePeriod,
+    useDynamicQuorum: Boolean(value.use_dynamic_quorum),
+    reflectorOracle:
+      value.reflector_oracle === undefined || value.reflector_oracle === null
+        ? null
+        : String(value.reflector_oracle),
+    minQuorumUsd: toBigInt(value.min_quorum_usd) ?? 0n,
+    maxCalldataSize: toNumber(value.max_calldata_size) ?? 10_000,
+    proposalCooldown: toNumber(value.proposal_cooldown) ?? 100,
+    maxProposalsPerPeriod: toNumber(value.max_proposals_per_period) ?? 5,
+    proposalPeriodDuration: toNumber(value.proposal_period_duration) ?? 10_000,
   };
 }
 

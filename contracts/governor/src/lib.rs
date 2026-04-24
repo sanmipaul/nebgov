@@ -191,6 +191,18 @@ pub struct GovernorSettings {
     pub proposal_period_duration: u32,
 }
 
+/// Estimated resource cost for executing a proposal.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExecutionGasEstimate {
+    pub proposal_id: u64,
+    pub action_count: u32,
+    pub calldata_bytes: u32,
+    pub estimated_cpu_insns: u64,
+    pub estimated_mem_bytes: u64,
+    pub estimated_fee_stroops: i128,
+}
+
 /// Vote support options.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -880,9 +892,32 @@ impl GovernorContract {
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
-    /// Cancel a proposal with proper authorization.
-    /// Proposer can cancel their own proposal while it is Pending.
-    /// Guardian can cancel any Active proposal as an emergency veto.
+    /// Execute multiple queued proposals in order.
+    ///
+    /// Performs a full queued-state preflight for every proposal before
+    /// executing any of them, avoiding partial completion in malformed batches.
+    pub fn execute_batch(env: Env, proposal_ids: Vec<u64>) {
+        assert!(!proposal_ids.is_empty(), "empty batch");
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            assert!(
+                Self::state(env.clone(), proposal_id) == ProposalState::Queued,
+                "proposal not queued"
+            );
+        }
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).expect("proposal missing");
+            Self::execute(env.clone(), proposal_id);
+        }
+
+        env.events()
+            .publish((symbol_short!("exbatch"),), proposal_ids);
+    }
+
+    /// Cancel a proposal. Only proposer or admin can cancel.
+    /// TODO issue #7: enforce cancellation rules, emit event.
     pub fn cancel(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
 
@@ -1233,6 +1268,7 @@ impl GovernorContract {
     /// This means the call must originate from an executed on-chain proposal.
     pub fn update_config(env: Env, new_settings: GovernorSettings) {
         env.current_contract_address().require_auth();
+        Self::validate_settings(&env, &new_settings);
 
         let old_settings = Self::get_settings(env.clone());
 

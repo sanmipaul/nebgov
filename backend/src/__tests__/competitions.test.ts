@@ -46,7 +46,6 @@ describe("Competition Endpoints", () => {
     );
     await pool.query("DELETE FROM competitions WHERE id = $1", [competitionId]);
     await pool.query("DELETE FROM users WHERE id = $1", [userId]);
-    await pool.end();
   });
 
   describe("POST /competitions/:id/join", () => {

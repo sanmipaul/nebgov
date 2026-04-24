@@ -11,15 +11,20 @@ import {
 } from "@stellar/stellar-sdk";
 import {
   GovernorConfig,
+  ExecutionGasEstimate,
   GovernorSettings,
+  GovernorSettingsValidationLimits,
   Proposal,
+  ProposalAction,
   ProposalInput,
+  ProposalSimulationResult,
   ProposalState,
   ProposalVotes,
   VoteSupport,
   Network,
   UnknownProposalStateError,
 } from "./types";
+import { GovernorError, GovernorErrorCode } from "./errors";
 import { hexToBytes32 } from "./utils";
 
 const RPC_URLS: Record<Network, string> = {
@@ -33,6 +38,29 @@ const NETWORK_PASSPHRASES: Record<Network, string> = {
   testnet: Networks.TESTNET,
   futurenet: Networks.FUTURENET,
 };
+
+const DEFAULT_MAX_VOTING_DELAY = 1_209_600;
+const DEFAULT_MIN_VOTING_PERIOD = 1;
+
+function toBigInt(value: unknown): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") return BigInt(value);
+  if (typeof value === "string") return BigInt(value);
+  return 0n;
+}
+
+function simulationCostValue(
+  cost: unknown,
+  ...keys: string[]
+): bigint | undefined {
+  if (!cost || typeof cost !== "object") return undefined;
+  const record = cost as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null) return toBigInt(value);
+  }
+  return undefined;
+}
 
 function scVecAddress(addrs: string[]): xdr.ScVal {
   return xdr.ScVal.scvVec(
@@ -86,22 +114,45 @@ export class GovernorClient {
   async propose(
     signer: Keypair,
     description: string,
-    descriptionHash: string,
-    metadataUri: string,
-    targets: string[],
-    fnNames: string[],
-    calldatas: (Buffer | Uint8Array)[],
+    descriptionHashOrTargets: string | string[],
+    metadataUriOrFnNames: string | string[],
+    targetsOrCalldatas: string[] | (Buffer | Uint8Array)[],
+    fnNamesArg?: string[],
+    calldatasArg?: (Buffer | Uint8Array)[],
   ): Promise<bigint> {
+    const legacyCall = Array.isArray(descriptionHashOrTargets);
+    const descriptionHash = legacyCall
+      ? "0".repeat(64)
+      : descriptionHashOrTargets;
+    const metadataUri = legacyCall ? "" : (metadataUriOrFnNames as string);
+    const targets = legacyCall
+      ? descriptionHashOrTargets
+      : (targetsOrCalldatas as string[]);
+    const fnNames = legacyCall ? (metadataUriOrFnNames as string[]) : fnNamesArg;
+    const calldatas = legacyCall
+      ? (targetsOrCalldatas as (Buffer | Uint8Array)[])
+      : calldatasArg;
+
+    if (!fnNames || !calldatas) {
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "targets, fnNames, and calldatas are required",
+      );
+    }
     if (
       targets.length !== fnNames.length ||
       targets.length !== calldatas.length
     ) {
-      throw new Error(
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
         "targets, fnNames, and calldatas must have the same length",
       );
     }
     if (targets.length === 0) {
-      throw new Error("At least one on-chain action is required");
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "At least one on-chain action is required",
+      );
     }
 
     // Convert hex string to BytesN<32>
@@ -261,6 +312,65 @@ export class GovernorClient {
     };
   }
 
+  /**
+   * Simulate each action in a proposal and aggregate compute hints.
+   */
+  async simulateProposal(
+    actions: ProposalAction[],
+    sourceAccount: string = this.config.governorAddress,
+  ): Promise<ProposalSimulationResult> {
+    try {
+      let computeUnits = 0;
+      const stateChanges: unknown[] = [];
+
+      for (const action of actions) {
+        const target = new Contract(action.target);
+        const op = target.call(
+          action.function,
+          ...action.args.map((arg) => nativeToScVal(arg)),
+        );
+        const result = await this.server.simulateTransaction(
+          new TransactionBuilder(
+            await this.server.getAccount(sourceAccount),
+            { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+          )
+            .addOperation(op)
+            .setTimeout(30)
+            .build(),
+        );
+
+        if (SorobanRpc.Api.isSimulationError(result)) {
+          const err = result as unknown as { error?: string };
+          return {
+            success: false,
+            error: `Simulation failed: ${err.error ?? "unknown"}`,
+          };
+        }
+
+        const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+          result?: { cost?: { cpuInstructions?: number } } | null;
+          cost?: { cpuInstructions?: number; cpuInsns?: string };
+        };
+        if (!success.result) {
+          return { success: false, error: "No simulation result returned" };
+        }
+
+        const cost =
+          success.result.cost?.cpuInstructions ??
+          success.cost?.cpuInstructions ??
+          Number(success.cost?.cpuInsns ?? 0);
+        computeUnits += Number(cost ?? 0);
+      }
+
+      return { success: true, computeUnits, stateChanges };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Simulation failed",
+      };
+    }
+  }
+
   /** Resource hints for the full `propose` transaction (simulation only). */
   async estimateProposeResources(
     proposer: string,
@@ -317,6 +427,65 @@ export class GovernorClient {
         error: e instanceof Error ? e.message : "estimate failed",
       };
     }
+  }
+
+  /**
+   * Simulate the governor's `estimate_execution_gas` view and return its cost hint.
+   *
+   * `sourceAccount` should be any funded account on the selected network. If it
+   * is omitted, the client falls back to the configured governor address for
+   * compatibility with existing SDK read methods.
+   */
+  async estimateExecutionGas(
+    proposalId: bigint,
+    sourceAccount: string = this.config.governorAddress,
+  ): Promise<ExecutionGasEstimate> {
+    const account = await this.server.getAccount(sourceAccount);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "estimate_execution_gas",
+          nativeToScVal(proposalId, { type: "u64" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const result = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation error: ${result.error}`);
+    }
+
+    const success = result as SorobanRpc.Api.SimulateTransactionSuccessResponse & {
+      cost?: Record<string, unknown>;
+    };
+    const raw = success.result?.retval;
+    if (!raw) throw new Error("No return value");
+
+    const native = scValToNative(raw) as Record<string, unknown>;
+    return {
+      proposalId: toBigInt(native.proposal_id ?? native.proposalId),
+      actionCount: Number(native.action_count ?? native.actionCount ?? 0),
+      calldataBytes: Number(native.calldata_bytes ?? native.calldataBytes ?? 0),
+      estimatedCpuInsns: toBigInt(
+        native.estimated_cpu_insns ?? native.estimatedCpuInsns,
+      ),
+      estimatedMemBytes: toBigInt(
+        native.estimated_mem_bytes ?? native.estimatedMemBytes,
+      ),
+      estimatedFeeStroops: toBigInt(
+        native.estimated_fee_stroops ?? native.estimatedFeeStroops,
+      ),
+      rpcCpuInsns: simulationCostValue(
+        success.cost,
+        "cpuInsns",
+        "cpuInstructions",
+      ),
+      rpcMemBytes: simulationCostValue(success.cost, "memBytes", "memoryBytes"),
+    };
   }
 
   /**
@@ -663,15 +832,73 @@ export class GovernorClient {
   }
 
   /**
+   * Validate settings before building or submitting an update_config proposal.
+   */
+  validateGovernorSettings(
+    newSettings: GovernorSettings,
+    limits: GovernorSettingsValidationLimits = {},
+  ): void {
+    const maxVotingDelay = limits.maxVotingDelay ?? DEFAULT_MAX_VOTING_DELAY;
+    const minVotingPeriod = limits.minVotingPeriod ?? DEFAULT_MIN_VOTING_PERIOD;
+
+    if (
+      !Number.isInteger(newSettings.votingDelay) ||
+      newSettings.votingDelay < 0 ||
+      newSettings.votingDelay > maxVotingDelay
+    ) {
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        `votingDelay must be between 0 and ${maxVotingDelay}`,
+      );
+    }
+    if (
+      !Number.isInteger(newSettings.votingPeriod) ||
+      newSettings.votingPeriod < minVotingPeriod
+    ) {
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        `votingPeriod must be at least ${minVotingPeriod}`,
+      );
+    }
+    if (
+      !Number.isInteger(newSettings.quorumNumerator) ||
+      newSettings.quorumNumerator <= 0 ||
+      newSettings.quorumNumerator > 100
+    ) {
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "quorumNumerator must be greater than 0 and at most 100",
+      );
+    }
+    if (newSettings.proposalThreshold < 0n) {
+      throw new GovernorError(
+        GovernorErrorCode.InvalidArguments,
+        "proposalThreshold must be greater than or equal to 0",
+      );
+    }
+  }
+
+  /**
    * Build calldata for an update_config proposal.
    *
    * Returns the target, function name, and encoded calldata to pass to propose().
    */
-  buildUpdateConfigProposal(newSettings: GovernorSettings): {
+  buildUpdateConfigProposal(
+    newSettings: GovernorSettings,
+    limits: GovernorSettingsValidationLimits = {},
+  ): {
     target: string;
     fnName: string;
     calldata: Uint8Array;
   } {
+    this.validateGovernorSettings(newSettings, limits);
+    const useDynamicQuorum = newSettings.useDynamicQuorum ?? false;
+    const minQuorumUsd = newSettings.minQuorumUsd ?? 0n;
+    const maxCalldataSize = newSettings.maxCalldataSize ?? 10_000;
+    const proposalCooldown = newSettings.proposalCooldown ?? 100;
+    const maxProposalsPerPeriod = newSettings.maxProposalsPerPeriod ?? 5;
+    const proposalPeriodDuration = newSettings.proposalPeriodDuration ?? 10_000;
+
     const settingsScVal = xdr.ScVal.scvMap([
       new xdr.ScMapEntry({
         key: xdr.ScVal.scvSymbol("voting_delay"),
@@ -688,6 +915,48 @@ export class GovernorClient {
       new xdr.ScMapEntry({
         key: xdr.ScVal.scvSymbol("proposal_threshold"),
         val: nativeToScVal(newSettings.proposalThreshold, { type: "i128" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("guardian"),
+        val: nativeToScVal(newSettings.guardian, { type: "address" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("vote_type"),
+        val: xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(newSettings.voteType)]),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("proposal_grace_period"),
+        val: nativeToScVal(newSettings.proposalGracePeriod, { type: "u32" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("use_dynamic_quorum"),
+        val: xdr.ScVal.scvBool(useDynamicQuorum),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("reflector_oracle"),
+        val: newSettings.reflectorOracle
+          ? nativeToScVal(newSettings.reflectorOracle, { type: "address" })
+          : xdr.ScVal.scvVoid(),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("min_quorum_usd"),
+        val: nativeToScVal(minQuorumUsd, { type: "i128" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("max_calldata_size"),
+        val: nativeToScVal(maxCalldataSize, { type: "u32" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("proposal_cooldown"),
+        val: nativeToScVal(proposalCooldown, { type: "u32" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("max_proposals_per_period"),
+        val: nativeToScVal(maxProposalsPerPeriod, { type: "u32" }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol("proposal_period_duration"),
+        val: nativeToScVal(proposalPeriodDuration, { type: "u32" }),
       }),
     ]);
 

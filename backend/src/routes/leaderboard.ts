@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Request, Response, Router } from "express";
 import { query, validationResult } from "express-validator";
 import pool from "../db/pool";
 import { LeaderboardHistoryWithUser } from "../entities/LeaderboardHistory";
@@ -14,7 +14,7 @@ router.get(
     query("limit").optional().isInt({ min: 1, max: 100 }).toInt(),
     query("offset").optional().isInt({ min: 0 }).toInt(),
   ],
-  async (req, res) => {
+  async (req: Request, res: Response) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });

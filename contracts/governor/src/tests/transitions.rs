@@ -120,6 +120,33 @@ fn test_pending_state_before_start_ledger() {
 }
 
 #[test]
+/// Verifies that the governor returns a deterministic execution cost estimate.
+fn test_estimate_execution_gas_returns_cost_hint() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    let estimate = client.estimate_execution_gas(&proposal_id);
+
+    assert_eq!(estimate.proposal_id, proposal_id);
+    assert_eq!(estimate.action_count, 1);
+    assert_eq!(estimate.calldata_bytes, 0);
+    assert!(estimate.estimated_cpu_insns > 0);
+    assert!(estimate.estimated_mem_bytes > 0);
+    assert!(estimate.estimated_fee_stroops > 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+/// Verifies that cancelled proposals are not cost-estimated.
+fn test_estimate_execution_gas_rejects_cancelled_proposal() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    client.cancel(&proposer, &proposal_id);
+    client.estimate_execution_gas(&proposal_id);
+}
+
+#[test]
 /// Verifies that a proposal becomes Active exactly at the start_ledger.
 fn test_active_state_at_start_ledger() {
     let (env, client, _, proposer, _) = setup();
@@ -356,4 +383,56 @@ fn test_execute_fails_before_timelock_delay() {
 
     // Current time is still 0 (default). ready_at will be 3600.
     client.execute(&proposal_id);
+}
+
+#[test]
+fn test_execute_batch_executes_all_in_order() {
+    let (env, client, admin, proposer, voter) = setup();
+
+    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
+    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
+    timelock_client.initialize(&admin, &client.address, &0);
+
+    let votes_token = Address::generate(&env);
+    client.initialize(&admin, &votes_token, &timelock_id, &10, &100, &0, &0);
+
+    let dummy_id = env.register(LocalDummyContract, ());
+    let fn_name = Symbol::new(&env, "noop");
+    let description_1 = String::from_str(&env, "batch-1");
+    let description_2 = String::from_str(&env, "batch-2");
+
+    let proposal_1 = client.propose(
+        &proposer,
+        &description_1,
+        &dummy_id,
+        &fn_name,
+        &Bytes::new(&env),
+    );
+    let proposal_2 = client.propose(
+        &proposer,
+        &description_2,
+        &dummy_id,
+        &fn_name,
+        &Bytes::from_array(&env, &[7u8]),
+    );
+
+    env.ledger().set_sequence_number(10);
+    client.cast_vote(&voter, &proposal_1, &VoteSupport::For);
+    let voter_2 = Address::generate(&env);
+    client.cast_vote(&voter_2, &proposal_2, &VoteSupport::For);
+
+    env.ledger().set_sequence_number(111);
+    assert_eq!(client.state(&proposal_1), ProposalState::Succeeded);
+    assert_eq!(client.state(&proposal_2), ProposalState::Succeeded);
+
+    client.queue(&proposal_1);
+    client.queue(&proposal_2);
+
+    let mut batch = Vec::new(&env);
+    batch.push_back(proposal_1);
+    batch.push_back(proposal_2);
+
+    client.execute_batch(&batch);
+    assert_eq!(client.state(&proposal_1), ProposalState::Executed);
+    assert_eq!(client.state(&proposal_2), ProposalState::Executed);
 }

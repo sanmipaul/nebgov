@@ -54,6 +54,33 @@ export class VotesClient {
   }
 
   /**
+   * Revoke delegation and remove voting power from the previous delegatee.
+   */
+  async revokeDelegation(signer: Keypair): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "revoke_delegation",
+          nativeToScVal(signer.publicKey(), { type: "address" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw parseVotesError(result);
+    }
+  }
+
+  /**
    * Delegate voting power to another address (or self-delegate).
    */
   async delegate(signer: Keypair, delegatee: string): Promise<void> {
@@ -67,8 +94,8 @@ export class VotesClient {
         this.contract.call(
           "delegate",
           nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(delegatee, { type: "address" })
-        )
+          nativeToScVal(delegatee, { type: "address" }),
+        ),
       )
       .setTimeout(30)
       .build();
@@ -86,18 +113,18 @@ export class VotesClient {
    */
   async getVotes(account: string): Promise<bigint> {
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(account),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
-      )
+      new TransactionBuilder(await this.server.getAccount(account), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
         .addOperation(
           this.contract.call(
             "get_votes",
-            nativeToScVal(account, { type: "address" })
-          )
+            nativeToScVal(account, { type: "address" }),
+          ),
         )
         .setTimeout(30)
-        .build()
+        .build(),
     );
 
     if (SorobanRpc.Api.isSimulationError(result)) return 0n;
@@ -111,19 +138,19 @@ export class VotesClient {
    */
   async getPastVotes(account: string, ledger: number): Promise<bigint> {
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(account),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
-      )
+      new TransactionBuilder(await this.server.getAccount(account), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
         .addOperation(
           this.contract.call(
             "get_past_votes",
             nativeToScVal(account, { type: "address" }),
-            nativeToScVal(ledger, { type: "u32" })
-          )
+            nativeToScVal(ledger, { type: "u32" }),
+          ),
         )
         .setTimeout(30)
-        .build()
+        .build(),
     );
 
     if (SorobanRpc.Api.isSimulationError(result)) return 0n;
@@ -137,18 +164,18 @@ export class VotesClient {
    */
   async getDelegatee(account: string): Promise<string | null> {
     const result = await this.server.simulateTransaction(
-      new TransactionBuilder(
-        await this.server.getAccount(account),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
-      )
+      new TransactionBuilder(await this.server.getAccount(account), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
         .addOperation(
           this.contract.call(
             "delegates",
-            nativeToScVal(account, { type: "address" })
-          )
+            nativeToScVal(account, { type: "address" }),
+          ),
         )
         .setTimeout(30)
-        .build()
+        .build(),
     );
 
     if (SorobanRpc.Api.isSimulationError(result)) return null;
@@ -164,11 +191,11 @@ export class VotesClient {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
         await this.server.getAccount(this.contract.contractId()),
-        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
       )
         .addOperation(this.contract.call("total_supply"))
         .setTimeout(30)
-        .build()
+        .build(),
     );
 
     if (SorobanRpc.Api.isSimulationError(result)) return 0n;
@@ -190,7 +217,7 @@ export class VotesClient {
    */
   async getTopDelegates(
     limit: number,
-    fromLedger?: number
+    fromLedger?: number,
   ): Promise<TopDelegate[]> {
     const delegationMap = await this.buildDelegationMap(fromLedger);
     if (delegationMap.size === 0) return [];
@@ -209,13 +236,17 @@ export class VotesClient {
         address: addr,
         votingPower: await this.getVotes(addr),
         delegatorCount: byDelegate.get(addr)!.size,
-      }))
+      })),
     );
 
     return powerEntries
       .filter((d) => d.votingPower > 0n)
       .sort((a, b) =>
-        b.votingPower > a.votingPower ? 1 : b.votingPower < a.votingPower ? -1 : 0
+        b.votingPower > a.votingPower
+          ? 1
+          : b.votingPower < a.votingPower
+            ? -1
+            : 0,
       )
       .slice(0, limit);
   }
@@ -232,7 +263,7 @@ export class VotesClient {
    * @param fromLedger - Earliest ledger to scan events from.
    */
   async getVotingPowerDistribution(
-    fromLedger?: number
+    fromLedger?: number,
   ): Promise<VotingPowerDistribution> {
     const [delegationMap, totalSupply] = await Promise.all([
       this.buildDelegationMap(fromLedger),
@@ -256,7 +287,7 @@ export class VotesClient {
     }
 
     const powers = await Promise.all(
-      Array.from(byDelegate.keys()).map((addr) => this.getVotes(addr))
+      Array.from(byDelegate.keys()).map((addr) => this.getVotes(addr)),
     );
 
     const activePowers = powers.filter((p) => p > 0n);
@@ -282,7 +313,7 @@ export class VotesClient {
    */
   async getDelegators(
     delegateAddress: string,
-    fromLedger?: number
+    fromLedger?: number,
   ): Promise<DelegatorInfo[]> {
     const delegationMap = await this.buildDelegationMap(fromLedger);
 
@@ -297,7 +328,7 @@ export class VotesClient {
       delegators.map(async (delegator) => ({
         delegator,
         power: await this.getVotes(delegator),
-      }))
+      })),
     );
 
     return results
@@ -316,7 +347,7 @@ export class VotesClient {
    */
   async getTopDelegatesByAddresses(
     addresses: string[],
-    limit = 20
+    limit = 20,
   ): Promise<DelegateInfo[]> {
     const totalSupply = await this.getTotalSupply();
     if (totalSupply === 0n) return [];
@@ -328,11 +359,9 @@ export class VotesClient {
           address,
           votes,
           percentOfSupply:
-            totalSupply > 0n
-              ? Number((votes * 10000n) / totalSupply) / 100
-              : 0,
+            totalSupply > 0n ? Number((votes * 10000n) / totalSupply) / 100 : 0,
         };
-      })
+      }),
     );
 
     return delegates
@@ -358,7 +387,7 @@ export class VotesClient {
     delegatee: string,
     nonce: bigint,
     expiry: bigint,
-    signature: Buffer
+    signature: Buffer,
   ): Promise<void> {
     const account = await this.server.getAccount(this.contract.contractId());
 
@@ -373,8 +402,8 @@ export class VotesClient {
           nativeToScVal(delegatee, { type: "address" }),
           nativeToScVal(nonce, { type: "u64" }),
           nativeToScVal(expiry, { type: "u64" }),
-          nativeToScVal(signature, { type: "bytes" })
-        )
+          nativeToScVal(signature, { type: "bytes" }),
+        ),
       )
       .setTimeout(30)
       .build();
@@ -396,7 +425,7 @@ export class VotesClient {
     signer: Keypair,
     delegatee: string,
     nonce: bigint,
-    expiry: bigint
+    expiry: bigint,
   ): Buffer {
     const message = Buffer.concat([
       Buffer.from(signer.publicKey()),
@@ -423,7 +452,7 @@ export class VotesClient {
    * @throws {VotesError} with code EventScanFailed on RPC failure.
    */
   private async buildDelegationMap(
-    fromLedger?: number
+    fromLedger?: number,
   ): Promise<Map<string, string>> {
     let startLedger = fromLedger;
     if (startLedger === undefined) {
@@ -432,7 +461,10 @@ export class VotesClient {
     }
 
     const contractId = this.contract.contractId();
-    const topicFilter = [xdr.ScVal.scvSymbol("del_chsh")];
+    const topicFilter = [
+      xdr.ScVal.scvSymbol("del_chsh"),
+      xdr.ScVal.scvSymbol("del_revk"),
+    ];
     const delegationMap = new Map<string, string>();
 
     try {
@@ -457,11 +489,24 @@ export class VotesClient {
 
         for (const event of events) {
           try {
+            const symbol = scValToNative(event.topic[0]);
             const delegator = scValToNative(event.topic[1]) as string;
-            const data = scValToNative(event.value) as [string | null, string];
-            const newDelegatee = data[1];
-            if (typeof delegator === "string" && typeof newDelegatee === "string") {
-              delegationMap.set(delegator, newDelegatee);
+            if (symbol === "del_chsh") {
+              const data = scValToNative(event.value) as [
+                string | null,
+                string,
+              ];
+              const newDelegatee = data[1];
+              if (
+                typeof delegator === "string" &&
+                typeof newDelegatee === "string"
+              ) {
+                delegationMap.set(delegator, newDelegatee);
+              }
+            } else if (symbol === "del_revk") {
+              if (typeof delegator === "string") {
+                delegationMap.delete(delegator);
+              }
             }
           } catch {
             // Malformed event — skip
@@ -476,7 +521,7 @@ export class VotesClient {
       throw new VotesError(
         VotesErrorCode.EventScanFailed,
         `Failed to scan delegation events: ${err instanceof Error ? err.message : String(err)}`,
-        err
+        err,
       );
     }
 

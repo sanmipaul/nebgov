@@ -1,17 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract,
-    contractimpl,
-    contracttype,
-    symbol_short,
-    token,
-    Address,
-    Bytes,
-    BytesN,
-    Env,
-};
 use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env,
+};
 
 #[cfg(test)]
 mod load_tests;
@@ -26,12 +18,12 @@ pub struct Checkpoint {
 
 #[contracttype]
 pub enum DataKey {
-    Delegate(Address), // delegator -> delegatee
+    Delegate(Address),    // delegator -> delegatee
     Checkpoints(Address), // account -> Vec<Checkpoint>
-    TotalCheckpoints, // Vec<Checkpoint> for total supply
-    Token, // underlying SEP-41 token address
+    TotalCheckpoints,     // Vec<Checkpoint> for total supply
+    Token,                // underlying SEP-41 token address
     Admin,
-    Nonce(Address), // owner -> nonce for delegate_by_sig
+    Nonce(Address),            // owner -> nonce for delegate_by_sig
     CheckpointRetentionPeriod, // u32: number of ledgers to retain checkpoints
 }
 
@@ -46,7 +38,9 @@ impl TokenVotesContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
         // Set default retention period to 100,800 ledgers (~2 weeks at 7.5s per ledger)
-        env.storage().instance().set(&DataKey::CheckpointRetentionPeriod, &100800u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::CheckpointRetentionPeriod, &100800u32);
     }
 
     /// Delegate voting power from caller to delegatee.
@@ -85,12 +79,49 @@ impl TokenVotesContract {
             Self::update_account_votes(&env, delegatee.clone(), balance);
         }
 
-        env.storage().persistent().set(&DataKey::Delegate(delegator.clone()), &delegatee);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Delegate(delegator.clone()), &delegatee);
 
         env.events().publish(
             (symbol_short!("del_chsh"), delegator.clone()),
-            (previous_delegate, delegatee)
+            (previous_delegate, delegatee),
         );
+    }
+
+    /// Revoke delegation and remove voting power from the previous delegatee.
+    pub fn revoke_delegation(env: Env, delegator: Address) {
+        delegator.require_auth();
+
+        let previous_delegate: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Delegate(delegator.clone()));
+
+        if let Some(old_delegatee) = previous_delegate {
+            let token_addr: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Token)
+                .expect("token not set");
+
+            let balance = token::TokenClient::new(&env, &token_addr).balance(&delegator);
+
+            if balance > 0 {
+                // Remove voting power from the previous delegate and total supply.
+                Self::update_account_votes(&env, old_delegatee.clone(), -balance);
+                Self::update_total_supply_checkpoint(&env, -balance);
+            }
+
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Delegate(delegator.clone()));
+
+            env.events().publish(
+                (symbol_short!("del_revk"), delegator),
+                (old_delegatee, balance),
+            );
+        }
     }
 
     /// Get the current delegatee of an account.
@@ -114,12 +145,18 @@ impl TokenVotesContract {
 
     /// Get the underlying token address.
     pub fn token(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Token).expect("not initialized")
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .expect("not initialized")
     }
 
     /// Get the admin address.
     pub fn admin(env: Env) -> Address {
-        env.storage().instance().get(&DataKey::Admin).expect("not initialized")
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized")
     }
 
     /// Get voting power at a past ledger sequence (snapshot).
@@ -158,10 +195,13 @@ impl TokenVotesContract {
         let current_ledger = env.ledger().sequence();
         if !checkpoints.is_empty() && checkpoints.last().unwrap().ledger == current_ledger {
             let last_idx = checkpoints.len() - 1;
-            checkpoints.set(last_idx, Checkpoint {
-                ledger: current_ledger,
-                votes,
-            });
+            checkpoints.set(
+                last_idx,
+                Checkpoint {
+                    ledger: current_ledger,
+                    votes,
+                },
+            );
         } else {
             checkpoints.push_back(Checkpoint {
                 ledger: current_ledger,
@@ -169,7 +209,9 @@ impl TokenVotesContract {
             });
         }
 
-        env.storage().persistent().set(&DataKey::Checkpoints(account), &checkpoints);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Checkpoints(account), &checkpoints);
     }
 
     // --- Internal helpers ---
@@ -187,15 +229,22 @@ impl TokenVotesContract {
             .unwrap_or(soroban_sdk::Vec::new(env));
 
         let current_ledger = env.ledger().sequence();
-        let old_votes = if checkpoints.is_empty() { 0 } else { checkpoints.last().unwrap().votes };
+        let old_votes = if checkpoints.is_empty() {
+            0
+        } else {
+            checkpoints.last().unwrap().votes
+        };
         let new_total = old_votes + delta;
 
         if !checkpoints.is_empty() && checkpoints.last().unwrap().ledger == current_ledger {
             let last_idx = checkpoints.len() - 1;
-            checkpoints.set(last_idx, Checkpoint {
-                ledger: current_ledger,
-                votes: new_total,
-            });
+            checkpoints.set(
+                last_idx,
+                Checkpoint {
+                    ledger: current_ledger,
+                    votes: new_total,
+                },
+            );
         } else {
             checkpoints.push_back(Checkpoint {
                 ledger: current_ledger,
@@ -203,7 +252,9 @@ impl TokenVotesContract {
             });
         }
 
-        env.storage().persistent().set(&DataKey::TotalCheckpoints, &checkpoints);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalCheckpoints, &checkpoints);
     }
 
     /// Update an account's voting power checkpoints by `delta`.
@@ -215,15 +266,22 @@ impl TokenVotesContract {
             .unwrap_or(soroban_sdk::Vec::new(env));
 
         let current_ledger = env.ledger().sequence();
-        let old_votes = if checkpoints.is_empty() { 0 } else { checkpoints.last().unwrap().votes };
+        let old_votes = if checkpoints.is_empty() {
+            0
+        } else {
+            checkpoints.last().unwrap().votes
+        };
         let new_votes = old_votes + delta;
 
         if !checkpoints.is_empty() && checkpoints.last().unwrap().ledger == current_ledger {
             let last_idx = checkpoints.len() - 1;
-            checkpoints.set(last_idx, Checkpoint {
-                ledger: current_ledger,
-                votes: new_votes,
-            });
+            checkpoints.set(
+                last_idx,
+                Checkpoint {
+                    ledger: current_ledger,
+                    votes: new_votes,
+                },
+            );
         } else {
             checkpoints.push_back(Checkpoint {
                 ledger: current_ledger,
@@ -231,9 +289,12 @@ impl TokenVotesContract {
             });
         }
 
-        env.storage().persistent().set(&DataKey::Checkpoints(account.clone()), &checkpoints);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Checkpoints(account.clone()), &checkpoints);
 
-        env.events().publish((symbol_short!("v_active"), account), (old_votes, new_votes));
+        env.events()
+            .publish((symbol_short!("v_active"), account), (old_votes, new_votes));
     }
 
     /// Binary search over an ordered checkpoint list.
@@ -288,7 +349,7 @@ impl TokenVotesContract {
         delegatee: Address,
         nonce: u64,
         expiry: u64,
-        _signature: BytesN<64>
+        _signature: BytesN<64>,
     ) {
         // Verify expiry against current ledger timestamp
         let current_time = env.ledger().timestamp();
@@ -340,11 +401,13 @@ impl TokenVotesContract {
             Self::update_account_votes(&env, delegatee.clone(), balance);
         }
 
-        env.storage().persistent().set(&DataKey::Delegate(owner.clone()), &delegatee);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Delegate(owner.clone()), &delegatee);
 
         env.events().publish(
             (symbol_short!("del_chsh"), owner.clone()),
-            (previous_delegate, delegatee)
+            (previous_delegate, delegatee),
         );
     }
 
@@ -357,17 +420,22 @@ impl TokenVotesContract {
             .expect("not initialized");
         admin.require_auth();
 
-        env.storage().instance().set(&DataKey::CheckpointRetentionPeriod, &period_ledgers);
+        env.storage()
+            .instance()
+            .set(&DataKey::CheckpointRetentionPeriod, &period_ledgers);
 
         env.events().publish(
             (symbol_short!("ret_set"),),
-            (period_ledgers, env.ledger().sequence())
+            (period_ledgers, env.ledger().sequence()),
         );
     }
 
     /// Get the current checkpoint retention period.
     pub fn checkpoint_retention_period(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::CheckpointRetentionPeriod).unwrap_or(100800u32) // default ~2 weeks
+        env.storage()
+            .instance()
+            .get(&DataKey::CheckpointRetentionPeriod)
+            .unwrap_or(100800u32) // default ~2 weeks
     }
 
     /// Prune old checkpoints to reduce storage costs.
@@ -406,7 +474,7 @@ impl TokenVotesContract {
 
         env.events().publish(
             (symbol_short!("pruned"),),
-            (total_pruned, safe_cutoff, current_ledger)
+            (total_pruned, safe_cutoff, current_ledger),
         );
 
         total_pruned
@@ -449,7 +517,9 @@ impl TokenVotesContract {
 
         let pruned_count = (start_idx as u32).min((checkpoints.len() as u32) - 1);
 
-        env.storage().persistent().set(&DataKey::TotalCheckpoints, &new_checkpoints);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TotalCheckpoints, &new_checkpoints);
 
         pruned_count
     }
@@ -472,7 +542,10 @@ impl TokenVotesContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{ testutils::{ Address as _, Events, Ledger as _ }, token, Env };
+    use soroban_sdk::{
+        testutils::{Address as _, Events, Ledger as _},
+        token, Env, IntoVal, Symbol,
+    };
 
     /// Deploy a fresh token-votes contract backed by a real stellar asset contract.
     /// Returns (contract_id, token_address).
@@ -689,6 +762,44 @@ mod tests {
         client.delegate(&delegator, &delegatee2);
         assert_eq!(client.get_votes(&delegatee1), 0);
         assert_eq!(client.get_votes(&delegatee2), 1000);
+    }
+
+    #[test]
+    fn test_revoke_delegation_removes_voting_power_and_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &500i128);
+
+        client.delegate(&delegator, &delegatee);
+        assert_eq!(client.get_votes(&delegatee), 500);
+        assert_eq!(client.delegates(&delegator), Some(delegatee.clone()));
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 500);
+
+        env.ledger().with_mut(|l| l.sequence_number += 1);
+        client.revoke_delegation(&delegator);
+
+        assert_eq!(client.get_votes(&delegatee), 0);
+        assert_eq!(client.delegates(&delegator), None);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 0);
+
+        let revoked_event = env.events().all().iter().any(|event| {
+            let topics = &event.1;
+            if topics.len() == 0 {
+                return false;
+            }
+            let sym: Symbol = topics.get_unchecked(0).into_val(&env);
+            sym == symbol_short!("del_revk")
+        });
+        assert!(revoked_event, "del_revk event should be emitted");
     }
 
     #[test]
@@ -1010,11 +1121,9 @@ mod tests {
             expected_total += amount;
             let actual_total = client.get_past_total_supply(&env.ledger().sequence());
             assert_eq!(
-                actual_total,
-                expected_total,
+                actual_total, expected_total,
                 "total supply mismatch after delegating {} (step {})",
-                amount,
-                i
+                amount, i
             );
         }
 

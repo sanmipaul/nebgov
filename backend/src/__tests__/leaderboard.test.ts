@@ -32,7 +32,6 @@ describe("Leaderboard Endpoints", () => {
       userId,
     ]);
     await pool.query("DELETE FROM users WHERE id = $1", [userId]);
-    await pool.end();
   });
 
   describe("GET /leaderboard/history", () => {

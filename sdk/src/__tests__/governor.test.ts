@@ -17,7 +17,6 @@ jest.mock("@stellar/stellar-sdk", () => {
   return {
     ...actual,
     scValToNative: mockScValToNative,
-    nativeToScVal: jest.fn(),
     nativeToScVal: mockNativeToScVal,
     SorobanRpc: {
       ...actual.SorobanRpc,
@@ -29,7 +28,6 @@ jest.mock("@stellar/stellar-sdk", () => {
         getTransaction: mockGetTransaction,
       })),
       Api: {
-        isSimulationError: jest.fn((result) => result && result.error !== undefined),
         isSimulationError: mockIsSimulationError,
         GetTransactionStatus: {
           SUCCESS: "SUCCESS",
@@ -82,7 +80,6 @@ describe("GovernorClient", () => {
     });
   });
 
-  describe("getProposalState", () => {
   describe("getProposalState()", () => {
     const variants = [
       { name: "Pending", expected: ProposalState.Pending },
@@ -94,7 +91,6 @@ describe("GovernorClient", () => {
       { name: "Cancelled", expected: ProposalState.Cancelled },
     ];
 
-    test.each(variants)("decodes variant '$name' correctly", async ({ name, expected }) => {
     test.each(variants)("returns $expected for variant '$name'", async ({ name, expected }) => {
       const scv = {} as xdr.ScVal;
       mockSimulate.mockResolvedValue({

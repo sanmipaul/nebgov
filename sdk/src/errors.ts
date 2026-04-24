@@ -308,6 +308,10 @@ export function parseTimelockError(
  * Codes 1–99 mirror on-chain contract error values; SDK-level codes start at 100.
  */
 export enum TreasuryErrorCode {
+  // On-chain contract errors (match contracts/treasury/src/lib.rs)
+  SingleTransferExceeded = 1,
+  DailyLimitExceeded     = 2,
+
   // SDK-level codes
   SimulationFailed = 100,
   TransactionFailed = 101,
