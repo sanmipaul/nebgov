@@ -1,6 +1,9 @@
 import express, { Request, Response } from "express";
+import { SorobanRpc } from "@stellar/stellar-sdk";
 import { pool } from "./db";
 import { cached, getMetrics } from "./cache";
+import { getLastIndexedLedger } from "./events";
+import { startTime } from "./index";
 
 const TTL = {
   proposals: 30_000,       // 30 seconds
@@ -9,14 +12,83 @@ const TTL = {
   profile: 30_000,         // 30 seconds
 };
 
-export function createApp(): express.Application {
+const HEALTH_LAG_THRESHOLD = Number(process.env.HEALTH_LAG_THRESHOLD ?? 100);
+const STELLAR_LEDGER_CLOSE_TIME_SECONDS = 5; // Stellar ledgers close approximately every 5 seconds
+
+interface HealthResponse {
+  status: "ok" | "degraded";
+  last_indexed_ledger: number;
+  current_ledger: number;
+  lag_ledgers: number;
+  lag_seconds: number;
+  total_proposals_indexed: number;
+  total_votes_indexed: number;
+  total_delegates_indexed: number;
+  uptime_seconds: number;
+  timestamp: string;
+}
+
+async function getHealthStatus(server: SorobanRpc.Server): Promise<HealthResponse> {
+  // Fetch current ledger from RPC
+  const latestLedger = await server.getLatestLedger();
+  const currentLedger = latestLedger.sequence;
+
+  // Get last indexed ledger from database
+  const lastIndexedLedger = await getLastIndexedLedger();
+
+  // Calculate lag
+  const lagLedgers = Math.max(0, currentLedger - lastIndexedLedger);
+  const lagSeconds = lagLedgers * STELLAR_LEDGER_CLOSE_TIME_SECONDS;
+
+  // Get counts from database
+  const [proposalsResult, votesResult, delegatesResult] = await Promise.all([
+    pool.query("SELECT COUNT(*) as count FROM proposals"),
+    pool.query("SELECT COUNT(*) as count FROM votes"),
+    pool.query("SELECT COUNT(DISTINCT delegator) as count FROM delegates"),
+  ]);
+
+  const totalProposals = Number(proposalsResult.rows[0]?.count ?? 0);
+  const totalVotes = Number(votesResult.rows[0]?.count ?? 0);
+  const totalDelegates = Number(delegatesResult.rows[0]?.count ?? 0);
+
+  // Calculate uptime
+  const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
+
+  // Determine status
+  const status = lagLedgers > HEALTH_LAG_THRESHOLD ? "degraded" : "ok";
+
+  return {
+    status,
+    last_indexed_ledger: lastIndexedLedger,
+    current_ledger: currentLedger,
+    lag_ledgers: lagLedgers,
+    lag_seconds: lagSeconds,
+    total_proposals_indexed: totalProposals,
+    total_votes_indexed: totalVotes,
+    total_delegates_indexed: totalDelegates,
+    uptime_seconds: uptimeSeconds,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+export function createApp(server: SorobanRpc.Server): express.Application {
   const app = express();
   app.use(express.json());
 
   // GET /health
-  app.get("/health", (_req: Request, res: Response): void => {
-    const metrics = getMetrics();
-    res.json({ status: "ok", cache: metrics });
+  app.get("/health", async (_req: Request, res: Response): Promise<void> => {
+    try {
+      const health = await getHealthStatus(server);
+      const httpStatus = health.status === "ok" ? 200 : 503;
+      res.status(httpStatus).json(health);
+    } catch (error) {
+      console.error("Health check error:", error);
+      res.status(503).json({
+        status: "degraded",
+        error: "Failed to retrieve health status",
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 
   // GET /proposals?offset=0&limit=20

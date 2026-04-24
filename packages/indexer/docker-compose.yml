@@ -25,6 +25,7 @@ services:
       GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS:-}
       POLL_INTERVAL_MS: 5000
       PORT: 3001
+      HEALTH_LAG_THRESHOLD: ${HEALTH_LAG_THRESHOLD:-100}
     ports:
       - "3001:3001"
     depends_on:

@@ -12,6 +12,9 @@ const RPC_URL = process.env.STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 const PORT = Number(process.env.PORT ?? 3001);
 
+// Track indexer startup time for uptime calculation
+export const startTime = Date.now();
+
 async function runIndexer(): Promise<void> {
   const server = new SorobanRpc.Server(RPC_URL, { allowHttp: false });
 
@@ -42,7 +45,8 @@ async function main(): Promise<void> {
   console.log("Database initialized");
 
   // Start REST API server
-  const app = createApp();
+  const server = new SorobanRpc.Server(RPC_URL, { allowHttp: false });
+  const app = createApp(server);
   app.listen(PORT, () => {
     console.log(`NebGov indexer API running on port ${PORT}`);
   });
