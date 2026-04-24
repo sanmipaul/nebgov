@@ -1,11 +1,25 @@
 import { Router } from "express";
 import { body, validationResult } from "express-validator";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import pool from "../db/pool";
 
 const router = Router();
 
-// POST /auth/login - Create/find user and return JWT (dev/simple auth)
+const ACCESS_TOKEN_EXPIRY = "15m";
+const REFRESH_TOKEN_EXPIRY_DAYS = 7;
+
+// Helper to hash refresh tokens
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+// Helper to generate refresh token
+function generateRefreshToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+// POST /auth/login - Wallet-signature-based login
 router.post(
   "/login",
   body("wallet_address").isString().trim().isLength({ min: 10, max: 56 }),
@@ -18,6 +32,7 @@ router.post(
     const walletAddress = (req.body.wallet_address as string).trim();
 
     try {
+      // Find or create user
       const existing = await pool.query<{ id: number; wallet_address: string }>(
         "SELECT id, wallet_address FROM users WHERE wallet_address = $1",
         [walletAddress],
@@ -32,13 +47,38 @@ router.post(
           )
         ).rows[0].id;
 
-      const token = jwt.sign(
+      // Generate access token (short-lived)
+      const accessToken = jwt.sign(
         { userId, walletAddress },
         process.env.JWT_SECRET!,
-        { expiresIn: "30d" },
+        { expiresIn: ACCESS_TOKEN_EXPIRY },
       );
 
-      res.json({ token, user_id: userId, wallet_address: walletAddress });
+      // Generate refresh token (long-lived)
+      const refreshToken = generateRefreshToken();
+      const tokenHash = hashToken(refreshToken);
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+
+      // Store refresh token in database
+      await pool.query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+        [userId, tokenHash, expiresAt],
+      );
+
+      // Set refresh token as httpOnly cookie
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000,
+      });
+
+      res.json({
+        accessToken,
+        user_id: userId,
+        wallet_address: walletAddress,
+      });
     } catch (error) {
       console.error("Error in /auth/login:", error);
       res.status(500).json({ error: "Failed to login" });
@@ -46,5 +86,111 @@ router.post(
   },
 );
 
-export default router;
+// POST /auth/refresh - Refresh access token
+router.post("/refresh", async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
 
+  if (!refreshToken) {
+    return res.status(401).json({ error: "Refresh token required" });
+  }
+
+  try {
+    const tokenHash = hashToken(refreshToken);
+
+    // Find refresh token in database
+    const result = await pool.query<{
+      id: number;
+      user_id: number;
+      expires_at: Date;
+    }>(
+      `SELECT rt.id, rt.user_id, rt.expires_at, u.wallet_address
+       FROM refresh_tokens rt
+       JOIN users u ON rt.user_id = u.id
+       WHERE rt.token_hash = $1`,
+      [tokenHash],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    const tokenData = result.rows[0];
+
+    // Check if token is expired
+    if (new Date(tokenData.expires_at) < new Date()) {
+      // Clean up expired token
+      await pool.query("DELETE FROM refresh_tokens WHERE id = $1", [
+        tokenData.id,
+      ]);
+      return res.status(401).json({ error: "Refresh token expired" });
+    }
+
+    // Delete old refresh token (rotation)
+    await pool.query("DELETE FROM refresh_tokens WHERE id = $1", [
+      tokenData.id,
+    ]);
+
+    // Generate new access token
+    const accessToken = jwt.sign(
+      {
+        userId: tokenData.user_id,
+        walletAddress: (result.rows[0] as any).wallet_address,
+      },
+      process.env.JWT_SECRET!,
+      { expiresIn: ACCESS_TOKEN_EXPIRY },
+    );
+
+    // Generate new refresh token
+    const newRefreshToken = generateRefreshToken();
+    const newTokenHash = hashToken(newRefreshToken);
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+
+    // Store new refresh token
+    await pool.query(
+      "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+      [tokenData.user_id, newTokenHash, expiresAt],
+    );
+
+    // Set new refresh token cookie
+    res.cookie("refreshToken", newRefreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({ accessToken });
+  } catch (error) {
+    console.error("Error in /auth/refresh:", error);
+    res.status(500).json({ error: "Failed to refresh token" });
+  }
+});
+
+// POST /auth/logout - Invalidate refresh token
+router.post("/logout", async (req, res) => {
+  const refreshToken = req.cookies.refreshToken;
+
+  if (!refreshToken) {
+    return res.status(200).json({ message: "Logged out" });
+  }
+
+  try {
+    const tokenHash = hashToken(refreshToken);
+
+    // Delete refresh token from database
+    await pool.query("DELETE FROM refresh_tokens WHERE token_hash = $1", [
+      tokenHash,
+    ]);
+
+    // Clear cookie
+    res.clearCookie("refreshToken");
+
+    res.json({ message: "Logged out successfully" });
+  } catch (error) {
+    console.error("Error in /auth/logout:", error);
+    res.status(500).json({ error: "Failed to logout" });
+  }
+});
+
+export default router;

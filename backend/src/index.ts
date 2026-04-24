@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
 import competitionsRouter from "./routes/competitions";
 import leaderboardRouter from "./routes/leaderboard";
 import authRouter from "./routes/auth";
@@ -38,8 +39,14 @@ const leaderboardLimiter = rateLimit({
 });
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    credentials: true,
+  }),
+);
 app.use(express.json());
+app.use(cookieParser());
 
 // Health check — exempt from rate limiting
 app.get("/health", (_req, res) => {
