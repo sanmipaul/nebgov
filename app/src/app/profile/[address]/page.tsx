@@ -10,6 +10,15 @@ import {
   Network,
   VoteSupport,
 } from "@nebgov/sdk";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 import { isValidStellarAddress, formatVotingPower } from "../../lib/utils";
 
 interface VotingRecord {
@@ -44,6 +53,9 @@ function VoterProfilePageContent() {
 
   const [data, setData] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [history, setHistory] = useState<{ ledger: number; votingPower: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [federatedName, setFederatedName] = useState<string | null>(null);
 
@@ -151,11 +163,31 @@ function VoterProfilePageContent() {
           totalVoted,
         });
 
+        const latestLedger = await governorClient.getLatestLedger();
+        const lookback = Math.min(latestLedger - 1, 17_280 * 7);
+        const steps = 8;
+        const slice = Math.max(1, Math.floor(lookback / (steps - 1)));
+        const points = Array.from({ length: steps }, (_, index) =>
+          Math.max(1, latestLedger - lookback + index * slice),
+        );
+
+        const snapshots = await Promise.all(
+          points.map(async (ledger) => ({
+            ledger,
+            votingPower: Number(await votesClient.getPastVotes(address, ledger)) / 1e7,
+          })),
+        );
+
+        setHistory(snapshots);
+        setHistoryLoading(false);
+
         // Try to resolve Stellar federation name
         await resolveFederatedName(address);
       } catch (err) {
         console.error("Error fetching profile data:", err);
         setError(err instanceof Error ? err.message : "Failed to load profile");
+        setHistoryError("Unable to load voting power history.");
+        setHistoryLoading(false);
       } finally {
         setLoading(false);
       }
@@ -324,6 +356,63 @@ function VoterProfilePageContent() {
           </div>
         </div>
       )}
+
+      {/* Voting Power History */}
+      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+              Voting Power History
+            </p>
+            <p className="text-xs text-gray-500">
+              Snapshot of voting power over recent ledgers
+            </p>
+          </div>
+          <p className="text-xs text-gray-500">
+            {history.length} points
+          </p>
+        </div>
+
+        {historyLoading ? (
+          <div className="h-72 rounded-xl bg-gray-100 animate-pulse" />
+        ) : historyError ? (
+          <div className="rounded-xl bg-red-50 border border-red-200 p-6 text-red-700">
+            {historyError}
+          </div>
+        ) : (
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={history} margin={{ top: 10, right: 20, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="ledger"
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
+                  tickLine={false}
+                  axisLine={false}
+                  minTickGap={20}
+                  tickFormatter={(value) => `#${value}`}
+                />
+                <YAxis
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={50}
+                  tickFormatter={(value) => String(value)}
+                />
+                <Tooltip formatter={(value) => [`${Number(value).toFixed(2)} XLM`, "Voting Power"]} />
+                <Line
+                  type="monotone"
+                  dataKey="votingPower"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  dot={{ r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
 
       {/* Voting History */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">

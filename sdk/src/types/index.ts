@@ -104,6 +104,26 @@ export interface ProposalSimulationResult {
   error?: string;
 }
 
+export interface GovernorEntry {
+  id: bigint;
+  governor: string;
+  timelock: string;
+  token: string;
+  deployer: string;
+}
+
+export interface FactoryConfig {
+  factoryAddress: string;
+  network: Network;
+  rpcUrl?: string;
+}
+
+export interface GuardianActivityEntry {
+  proposalId: bigint;
+  canceller: string;
+  ledger: number;
+}
+
 export interface GovernorSettings {
   votingDelay: number;
   votingPeriod: number;

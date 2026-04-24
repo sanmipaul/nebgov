@@ -205,6 +205,31 @@ export class VotesClient {
   }
 
   /**
+   * Get total delegated supply at a past ledger sequence.
+   */
+  async getPastTotalSupply(ledger: number): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.contract.contractId()),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+      )
+        .addOperation(
+          this.contract.call(
+            "get_past_total_supply",
+            nativeToScVal(ledger, { type: "u32" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
+  /**
    * Get top N delegates sorted by current voting power.
    *
    * Scans `del_chsh` (delegate changed) events emitted by the token-votes

@@ -779,6 +779,7 @@ export class GovernorClient {
       Queued: ProposalState.Queued,
       Executed: ProposalState.Executed,
       Cancelled: ProposalState.Cancelled,
+      Expired: ProposalState.Expired,
     };
 
     // DEBUG: throw info
@@ -919,6 +920,73 @@ export class GovernorClient {
     const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
       .result?.retval;
     return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
+  async getProposalExpiryLedger(proposalId: bigint): Promise<number> {
+    const proposal = await this.getProposal(proposalId);
+    const settings = await this.getSettings();
+    return proposal.endLedger + settings.proposalGracePeriod;
+  }
+
+  async getGuardianActivity(
+    fromLedger?: number,
+  ): Promise<{
+    proposalId: bigint;
+    canceller: string;
+    ledger: number;
+  }[]> {
+    const settings = await this.getSettings();
+    const guardianAddress = settings.guardian;
+    if (!guardianAddress) return [];
+
+    const contractId = this.contract.contractId();
+    const topicFilter = [xdr.ScVal.scvSymbol("ProposalCancelled")];
+    const results: {
+      proposalId: bigint;
+      canceller: string;
+      ledger: number;
+    }[] = [];
+
+    let cursor = fromLedger ?? 1;
+    const latest = (await this.server.getLatestLedger()).sequence;
+
+    while (cursor <= latest) {
+      const response = await this.server.getEvents({
+        startLedger: cursor,
+        filters: [
+          {
+            type: "contract",
+            contractIds: [contractId],
+            topics: [topicFilter.map((v) => v.toXDR("base64"))],
+          },
+        ],
+        limit: 100,
+      });
+
+      const events = response.events ?? [];
+      if (events.length === 0) break;
+
+      let maxLedger = cursor;
+      for (const event of events) {
+        try {
+          const value = scValToNative(event.value) as Record<string, unknown>;
+          const proposalIdValue = value.proposal_id;
+          const caller = String(value.caller ?? "");
+          const proposalId = BigInt(proposalIdValue as number | bigint | string);
+          const ledger = event.ledger;
+          if (caller === guardianAddress) {
+            results.push({ proposalId, canceller: caller, ledger });
+          }
+        } catch {
+          // ignore malformed event
+        }
+        if (event.ledger > maxLedger) maxLedger = event.ledger;
+      }
+
+      cursor = maxLedger + 1;
+    }
+
+    return results;
   }
 
   /**

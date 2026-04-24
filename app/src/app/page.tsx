@@ -25,6 +25,7 @@ const STATE_COLORS: Record<ProposalState, string> = {
   [ProposalState.Queued]: "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
   [ProposalState.Executed]: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300",
   [ProposalState.Cancelled]: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500",
+  [ProposalState.Expired]: "bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400",
 };
 
 const PROPOSALS_PER_PAGE = 10;

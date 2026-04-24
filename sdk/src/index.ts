@@ -14,6 +14,7 @@
 
 export { GovernorClient } from "./governor";
 export { VotesClient } from "./votes";
+export { FactoryClient } from "./factory";
 export { TimelockClient } from "./timelock";
 export { TreasuryClient } from "./treasury";
 export { WrapperClient } from "./wrapper";
