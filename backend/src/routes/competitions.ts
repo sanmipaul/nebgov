@@ -1,8 +1,8 @@
 import { Router, Response } from "express";
-import { param, validationResult } from "express-validator";
 import { z } from "zod";
 import pool from "../db/pool";
 import { authenticate, AuthRequest } from "../middleware/auth";
+import { validate } from "../middleware/validate";
 import { Competition } from "../entities/Competition";
 import { CompetitionParticipant } from "../entities/CompetitionParticipant";
 
@@ -20,26 +20,25 @@ const getCompetitionSchema = z.object({
 });
 
 const listParticipantsSchema = z.object({
+  params: z.object({
+    id: z.coerce.number().int().positive(),
+  }),
+  query: z.object({
+    limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+    offset: z.coerce.number().int().min(0).optional().default(0),
+  }),
+});
+
+const competitionIdSchema = z.object({
   id: z.coerce.number().int().positive(),
-  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
-  offset: z.coerce.number().int().min(0).optional().default(0),
 });
 
 // GET /competitions - List all competitions with pagination
 router.get(
   "/",
+  validate({ query: listCompetitionsSchema }),
   async (req, res) => {
-    const parsed = listCompetitionsSchema.safeParse(req.query);
-    if (!parsed.success) {
-      return res.status(400).json({
-        errors: parsed.error.issues.map((e) => ({
-          field: e.path.join("."),
-          message: e.message,
-        })),
-      });
-    }
-
-    const { is_active, limit, offset } = parsed.data;
+    const { is_active, limit, offset } = req.query as any;
 
     try {
       let queryText = `
@@ -92,20 +91,11 @@ router.get(
 // GET /competitions/:id - Get single competition
 router.get(
   "/:id",
+  validate({ params: getCompetitionSchema }),
   async (req: AuthRequest, res: Response) => {
-    const parsed = getCompetitionSchema.safeParse(req.params);
-    if (!parsed.success) {
-      return res.status(400).json({
-        errors: parsed.error.issues.map((e) => ({
-          field: e.path.join("."),
-          message: e.message,
-        })),
-      });
-    }
+    const competitionId = (req.params as any).id;
 
     try {
-      const competitionId = parsed.data.id;
-
       const result = await pool.query(
         `SELECT c.*, COUNT(cp.id) AS participant_count
          FROM competitions c
@@ -141,22 +131,13 @@ router.get(
 // GET /competitions/:id/participants - Get competition participants
 router.get(
   "/:id/participants",
+  validate({
+    params: listParticipantsSchema.shape.params,
+    query: listParticipantsSchema.shape.query,
+  }),
   async (req, res) => {
-    const parsed = listParticipantsSchema.safeParse({
-      id: req.params.id,
-      limit: req.query.limit,
-      offset: req.query.offset,
-    });
-    if (!parsed.success) {
-      return res.status(400).json({
-        errors: parsed.error.issues.map((e) => ({
-          field: e.path.join("."),
-          message: e.message,
-        })),
-      });
-    }
-
-    const { id: competitionId, limit, offset } = parsed.data;
+    const { id: competitionId } = req.params as any;
+    const { limit, offset } = req.query as any;
 
     try {
       const compResult = await pool.query(
@@ -204,18 +185,14 @@ router.get(
 router.post(
   "/:id/join",
   authenticate,
-  param("id").isInt().toInt(),
+  validate({ params: competitionIdSchema }),
   async (req: AuthRequest, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
 
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
-      const competitionId = parseInt(req.params.id);
+      const competitionId = (req.params as any).id;
       const userId = req.userId!;
 
       const compResult = await client.query<Competition>(
@@ -281,18 +258,14 @@ router.post(
 router.delete(
   "/:id/leave",
   authenticate,
-  param("id").isInt().toInt(),
+  validate({ params: competitionIdSchema }),
   async (req: AuthRequest, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
 
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
 
-      const competitionId = parseInt(req.params.id);
+      const competitionId = (req.params as any).id;
       const userId = req.userId!;
 
       const compResult = await client.query<Competition>(

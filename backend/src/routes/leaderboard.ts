@@ -1,34 +1,25 @@
 import { Request, Response, Router } from "express";
-import { query, validationResult } from "express-validator";
+import { z } from "zod";
 import pool from "../db/pool";
+import { validate } from "../middleware/validate";
 import { LeaderboardHistoryWithUser } from "../entities/LeaderboardHistory";
 
 const router = Router();
 
+const leaderboardHistorySchema = z.object({
+  date: z.coerce.date().optional(),
+  user_id: z.coerce.number().int().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+});
+
 // GET /leaderboard/history - Get historical leaderboard rankings
 router.get(
   "/history",
-  [
-    query("date").optional().isISO8601().toDate(),
-    query("user_id").optional().isInt().toInt(),
-    query("limit").optional().isInt({ min: 1, max: 100 }).toInt(),
-    query("offset").optional().isInt({ min: 0 }).toInt(),
-  ],
+  validate({ query: leaderboardHistorySchema }),
   async (req: Request, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     try {
-      const date = req.query.date as Date | undefined;
-      const userId = req.query.user_id
-        ? parseInt(req.query.user_id as string)
-        : undefined;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
-      const offset = req.query.offset
-        ? parseInt(req.query.offset as string)
-        : 0;
+      const { date, user_id: userId, limit, offset } = req.query as any;
 
       let queryText = `
         SELECT 
