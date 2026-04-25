@@ -71,6 +71,8 @@ export interface GovernorConfig {
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
   rpcUrl?: string;
+  /** Optional funded classic account used for read-only simulation calls. */
+  simulationAccount?: string;
   /** Maximum number of retry attempts for RPC calls (default: 3) */
   maxAttempts?: number;
   /** Base delay in milliseconds for exponential backoff (default: 1000) */

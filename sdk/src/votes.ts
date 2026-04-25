@@ -145,7 +145,7 @@ export class VotesClient {
   async getVotes(account: string): Promise<bigint> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
-        new TransactionBuilder(await this.server.getAccount(account), {
+        new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
           fee: BASE_FEE,
           networkPassphrase: this.networkPassphrase,
         })
@@ -172,7 +172,7 @@ export class VotesClient {
   async getPastVotes(account: string, ledger: number): Promise<bigint> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
-        new TransactionBuilder(await this.server.getAccount(account), {
+        new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
           fee: BASE_FEE,
           networkPassphrase: this.networkPassphrase,
         })
@@ -200,7 +200,7 @@ export class VotesClient {
   async getDelegatee(account: string): Promise<string | null> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
-        new TransactionBuilder(await this.server.getAccount(account), {
+        new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
           fee: BASE_FEE,
           networkPassphrase: this.networkPassphrase,
         })
@@ -228,7 +228,7 @@ export class VotesClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.contract.contractId()),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(this.contract.call("total_supply"))
@@ -250,7 +250,7 @@ export class VotesClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.contract.contractId()),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(
@@ -506,6 +506,10 @@ export class VotesClient {
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
+
+  private readAccount(fallback?: string): string {
+    return this.config.simulationAccount ?? fallback ?? this.contract.contractId();
+  }
 
   /**
    * Scan all `del_chsh` (delegate changed) events from the token-votes

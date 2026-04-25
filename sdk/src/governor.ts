@@ -325,7 +325,7 @@ export class GovernorClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(this.contract.call("proposal_threshold"))
@@ -342,11 +342,12 @@ export class GovernorClient {
 
   /** Read the full governor settings struct via `get_settings()`. */
   async getSettings(
-    sourceAccount: string = this.config.governorAddress,
+    sourceAccount?: string,
   ): Promise<GovernorSettings> {
     return this.retry(async () => {
+      const readAccount = this.readAccount(sourceAccount);
       const result = await this.server.simulateTransaction(
-        new TransactionBuilder(await this.server.getAccount(sourceAccount), {
+        new TransactionBuilder(await this.server.getAccount(readAccount), {
           fee: BASE_FEE,
           networkPassphrase: this.networkPassphrase,
         })
@@ -442,7 +443,7 @@ export class GovernorClient {
    */
   async simulateProposal(
     actions: ProposalAction[],
-    sourceAccount: string = this.config.governorAddress,
+    sourceAccount?: string,
   ): Promise<ProposalSimulationResult> {
     return this.retry(async () => {
       try {
@@ -455,9 +456,10 @@ export class GovernorClient {
             action.function,
             ...action.args.map((arg) => nativeToScVal(arg)),
           );
-          const result = await this.server.simulateTransaction(
+          const readAccount = this.readAccount(sourceAccount);
+      const result = await this.server.simulateTransaction(
             new TransactionBuilder(
-              await this.server.getAccount(sourceAccount),
+              await this.server.getAccount(readAccount),
               { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
             )
               .addOperation(op)
@@ -567,10 +569,10 @@ export class GovernorClient {
    */
   async estimateExecutionGas(
     proposalId: bigint,
-    sourceAccount: string = this.config.governorAddress,
+    sourceAccount?: string,
   ): Promise<ExecutionGasEstimate> {
     return this.retry(async () => {
-      const account = await this.server.getAccount(sourceAccount);
+      const account = await this.server.getAccount(this.readAccount(sourceAccount));
       const tx = new TransactionBuilder(account, {
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
@@ -821,7 +823,7 @@ export class GovernorClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(
@@ -883,7 +885,7 @@ export class GovernorClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(
@@ -914,6 +916,38 @@ export class GovernorClient {
   }
 
   /**
+   * Get the quorum required for a specific proposal.
+   * The quorum is calculated based on the total supply at the proposal's start ledger.
+   */
+  async getQuorum(proposalId: bigint): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.config.governorAddress),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+      )
+        .addOperation(
+          this.contract.call(
+            "get_quorum",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation error: ${result.error}`);
+    }
+
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    if (!raw) throw new Error("No return value");
+
+    const quorum = scValToNative(raw) as bigint;
+    return quorum;
+  }
+
+  /**
    * Check if an address has voted on a proposal.
    * Returns true if the address has cast a vote.
    */
@@ -922,7 +956,7 @@ export class GovernorClient {
       try {
         const result = await this.server.simulateTransaction(
           new TransactionBuilder(
-            await this.server.getAccount(this.config.governorAddress),
+            await this.server.getAccount(this.readAccount()),
             { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
           )
             .addOperation(
@@ -999,7 +1033,7 @@ export class GovernorClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(this.contract.call("proposal_count"))
@@ -1147,8 +1181,9 @@ export class GovernorClient {
       const currentLedger = await this.getLatestLedger();
 
       // Check cooldown
-      if (lastProposalLedger > 0) {
-        const nextAvailable = lastProposalLedger + settings.proposalCooldown;
+      const cooldown = settings.proposalCooldown ?? 0;
+      if (lastProposalLedger > 0 && cooldown > 0) {
+        const nextAvailable = lastProposalLedger + cooldown;
         if (currentLedger < nextAvailable) {
           return {
             canPropose: false,
@@ -1159,13 +1194,15 @@ export class GovernorClient {
       }
 
       // Check period limit
-      if (proposalsInPeriod >= settings.maxProposalsPerPeriod) {
+      const maxProposals = settings.maxProposalsPerPeriod ?? 0;
+      const periodDuration = settings.proposalPeriodDuration ?? 0;
+      if (maxProposals > 0 && periodDuration > 0 && proposalsInPeriod >= maxProposals) {
         const nextPeriodStart =
-          (Math.floor(currentLedger / settings.proposalPeriodDuration) + 1) *
-          settings.proposalPeriodDuration;
+          (Math.floor(currentLedger / periodDuration) + 1) *
+          periodDuration;
         return {
           canPropose: false,
-          reason: `Proposal limit reached for current period (${settings.maxProposalsPerPeriod} max).`,
+          reason: `Proposal limit reached for current period (${maxProposals} max).`,
           availableAtLedger: nextPeriodStart,
         };
       }
@@ -1191,7 +1228,7 @@ export class GovernorClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
         )
           .addOperation(
@@ -1388,6 +1425,14 @@ export class GovernorClient {
 
   // --- Internal ---
 
+  private readAccount(sourceAccount?: string): string {
+    return (
+      sourceAccount ??
+      this.config.simulationAccount ??
+      this.config.governorAddress
+    );
+  }
+
   private async pollForConfirmation(
     hash: string,
     retries = 10,
@@ -1413,7 +1458,7 @@ export class GovernorClient {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
         new TransactionBuilder(
-          await this.server.getAccount(this.config.governorAddress),
+          await this.server.getAccount(this.readAccount()),
           { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
         )
           .addOperation(

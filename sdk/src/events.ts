@@ -19,6 +19,8 @@ const TOPICS = {
   proposalExpired: "ProposalExpired",
   governorUpgraded: "GovernorUpgraded",
   configUpdated: "ConfigUpdated",
+  paused: "Paused",
+  unpaused: "Unpaused",
   legacyProposalCreated: "prop_crtd",
   legacyVoteCast: "vote",
   legacyProposalExecuted: "execute",
@@ -78,6 +80,15 @@ export interface GovernorUpgradedEventData {
 export interface ConfigUpdatedEventData {
   oldSettings: GovernorSettings;
   newSettings: GovernorSettings;
+}
+
+export interface PauseEventData {
+  pauser: string;
+  ledger: number;
+}
+
+export interface UnpauseEventData {
+  ledger: number;
 }
 
 export interface SubscriptionOptions {
@@ -573,4 +584,44 @@ export function subscribeToConfigUpdated(
   opts: SubscriptionOptions
 ): () => void {
   return createTopicSubscription(governorAddress, TOPICS.configUpdated, callback, opts);
+}
+
+export function parsePauseEvent(event: SorobanEvent): PauseEventData | null {
+  if (event.topic[0] !== TOPICS.paused) return null;
+  if (!isRecord(event.value)) return null;
+
+  const ledger = toNumber(event.value.ledger);
+  if (ledger === null) return null;
+
+  // The pauser address is the second topic segment when present; fall back to
+  // the value field for completeness.
+  const pauser = event.topic[1] ?? String(event.value.pauser ?? "");
+
+  return { pauser: String(pauser), ledger };
+}
+
+export function parseUnpauseEvent(event: SorobanEvent): UnpauseEventData | null {
+  if (event.topic[0] !== TOPICS.unpaused) return null;
+  if (!isRecord(event.value)) return null;
+
+  const ledger = toNumber(event.value.ledger);
+  if (ledger === null) return null;
+
+  return { ledger };
+}
+
+export function subscribeToPauseEvents(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.paused, callback, opts);
+}
+
+export function subscribeToUnpauseEvents(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.unpaused, callback, opts);
 }

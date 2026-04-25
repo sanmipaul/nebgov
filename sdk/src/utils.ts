@@ -36,31 +36,45 @@ export function hexToBytes32(hex: string): Uint8Array {
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  opts: {
-    maxAttempts: number;
-    baseDelayMs: number;
+  opts?: {
+    maxAttempts?: number;
+    baseDelayMs?: number;
     retryOn?: (e: unknown) => boolean;
     onRetry?: (attempt: number, error: unknown) => void;
   }
 ): Promise<T> {
+  const maxAttempts = opts?.maxAttempts ?? 3;
+  const baseDelayMs = opts?.baseDelayMs ?? 1000;
+  
   let lastError: unknown;
-  for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await fn();
     } catch (e) {
       lastError = e;
-      if (opts.retryOn && !opts.retryOn(e)) {
+      if (opts?.retryOn && !opts.retryOn(e)) {
         throw e;
       }
-      if (attempt === opts.maxAttempts) {
+      if (attempt === maxAttempts) {
         break;
       }
-      const delay = opts.baseDelayMs * Math.pow(2, attempt - 1);
-      if (opts.onRetry) {
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      if (opts?.onRetry) {
         opts.onRetry(attempt, e);
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
   throw lastError;
+}
+
+export function isNetworkError(e: unknown): boolean {
+  if (e instanceof TypeError && e.message.toLowerCase().includes("fetch")) {
+    return true;
+  }
+  const status = (e as any)?.response?.status;
+  if (status >= 500 && status < 600) {
+    return true;
+  }
+  return false;
 }
