@@ -15,6 +15,7 @@ import {
   TreasuryErrorCode,
   parseTreasuryError,
 } from "./errors";
+import { withRetry, isNetworkError } from "./utils";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -77,6 +78,32 @@ export class TreasuryClient {
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
   }
 
+  private async retry<T>(
+    fn: () => Promise<T>,
+    filter?: (e: unknown) => boolean,
+  ): Promise<T> {
+    return withRetry(fn, {
+      maxAttempts: this.config.maxAttempts,
+      baseDelayMs: this.config.baseDelayMs,
+      retryOn: filter ?? isNetworkError,
+    });
+  }
+
+  private isRetryableSubmissionError(e: unknown): boolean {
+    if (isNetworkError(e)) return true;
+    if (e instanceof TreasuryError) {
+      // Don't retry on contract logic errors (codes < 100)
+      return (
+        e.code >= 100 &&
+        e.code !== TreasuryErrorCode.TransactionFailed &&
+        e.code !== TreasuryErrorCode.MissingReturnValue
+      );
+    }
+    const msg = String(e);
+    if (msg.includes("TransactionAlreadyInMempool")) return false;
+    return false;
+  }
+
   /**
    * Disburse tokens to multiple recipients in a single transaction.
    *
@@ -93,64 +120,66 @@ export class TreasuryClient {
   async batchTransfer(
     signer: Keypair,
     token: string,
-    recipients: BatchTransferRecipient[]
+    recipients: BatchTransferRecipient[],
   ): Promise<string> {
-    if (recipients.length === 0) {
-      throw new TreasuryError(
-        TreasuryErrorCode.InvalidArguments,
-        "recipients list must not be empty"
-      );
-    }
-
-    for (const r of recipients) {
-      if (r.amount <= 0n) {
+    return this.retry(async () => {
+      if (recipients.length === 0) {
         throw new TreasuryError(
           TreasuryErrorCode.InvalidArguments,
-          `amount must be positive, got ${r.amount} for ${r.address}`
+          "recipients list must not be empty",
         );
       }
-    }
 
-    const account = await this.server.getAccount(signer.publicKey());
+      for (const r of recipients) {
+        if (r.amount <= 0n) {
+          throw new TreasuryError(
+            TreasuryErrorCode.InvalidArguments,
+            `amount must be positive, got ${r.amount} for ${r.address}`,
+          );
+        }
+      }
 
-    const recipientsScVal = xdr.ScVal.scvVec(
-      recipients.map(encodeBatchRecipient)
-    );
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "batch_transfer",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(token, { type: "address" }),
-          recipientsScVal
-        )
-      )
-      .setTimeout(30)
-      .build();
-
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
-
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw parseTreasuryError(result);
-    }
-
-    const confirmed = await this.pollForConfirmation(result.hash);
-    const returnVal = confirmed.returnValue;
-    if (!returnVal) {
-      throw new TreasuryError(
-        TreasuryErrorCode.MissingReturnValue,
-        "No return value from batch_transfer"
+      const recipientsScVal = xdr.ScVal.scvVec(
+        recipients.map(encodeBatchRecipient),
       );
-    }
 
-    const bytes = scValToNative(returnVal) as Uint8Array;
-    return Buffer.from(bytes).toString("hex");
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "batch_transfer",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(token, { type: "address" }),
+            recipientsScVal,
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      const confirmed = await this.pollForConfirmation(result.hash);
+      const returnVal = confirmed.returnValue;
+      if (!returnVal) {
+        throw new TreasuryError(
+          TreasuryErrorCode.MissingReturnValue,
+          "No return value from batch_transfer",
+        );
+      }
+
+      const bytes = scValToNative(returnVal) as Uint8Array;
+      return Buffer.from(bytes).toString("hex");
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -178,44 +207,46 @@ export class TreasuryClient {
     signer: Keypair,
     target: string,
     calldata: Buffer | Uint8Array,
-    amount: bigint
+    amount: bigint,
   ): Promise<bigint> {
-    const account = await this.server.getAccount(signer.publicKey());
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
 
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(
-        this.contract.call(
-          "submit_with_limit",
-          nativeToScVal(signer.publicKey(), { type: "address" }),
-          nativeToScVal(target, { type: "address" }),
-          nativeToScVal(calldata, { type: "bytes" }),
-          nativeToScVal(amount, { type: "i128" })
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "submit_with_limit",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(target, { type: "address" }),
+            nativeToScVal(calldata, { type: "bytes" }),
+            nativeToScVal(amount, { type: "i128" }),
+          ),
         )
-      )
-      .setTimeout(30)
-      .build();
+        .setTimeout(30)
+        .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
 
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw parseTreasuryError(result);
-    }
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
 
-    const confirmed = await this.pollForConfirmation(result.hash);
-    const returnVal = confirmed.returnValue;
-    if (!returnVal) {
-      throw new TreasuryError(
-        TreasuryErrorCode.MissingReturnValue,
-        "No return value from submit_with_limit"
-      );
-    }
+      const confirmed = await this.pollForConfirmation(result.hash);
+      const returnVal = confirmed.returnValue;
+      if (!returnVal) {
+        throw new TreasuryError(
+          TreasuryErrorCode.MissingReturnValue,
+          "No return value from submit_with_limit",
+        );
+      }
 
-    return scValToNative(returnVal) as bigint;
+      return scValToNative(returnVal) as bigint;
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   // --- Internal ---
@@ -223,11 +254,11 @@ export class TreasuryClient {
   private async pollForConfirmation(
     hash: string,
     retries = 10,
-    delayMs = 2000
+    delayMs = 2000,
   ): Promise<SorobanRpc.Api.GetSuccessfulTransactionResponse> {
     for (let i = 0; i < retries; i++) {
       await new Promise((r) => setTimeout(r, delayMs));
-      const status = await this.server.getTransaction(hash);
+      const status = await this.retry(() => this.server.getTransaction(hash));
       if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
         return status as SorobanRpc.Api.GetSuccessfulTransactionResponse;
       }

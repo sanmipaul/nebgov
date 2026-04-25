@@ -26,3 +26,41 @@ export function hexToBytes32(hex: string): Uint8Array {
     }
     return bytes;
 }
+
+/**
+ * Executes a function with exponential backoff retry logic.
+ *
+ * @param fn - The async function to execute
+ * @param opts - Retry configuration
+ * @returns The result of the function call
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: {
+    maxAttempts: number;
+    baseDelayMs: number;
+    retryOn?: (e: unknown) => boolean;
+    onRetry?: (attempt: number, error: unknown) => void;
+  }
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (opts.retryOn && !opts.retryOn(e)) {
+        throw e;
+      }
+      if (attempt === opts.maxAttempts) {
+        break;
+      }
+      const delay = opts.baseDelayMs * Math.pow(2, attempt - 1);
+      if (opts.onRetry) {
+        opts.onRetry(attempt, e);
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}

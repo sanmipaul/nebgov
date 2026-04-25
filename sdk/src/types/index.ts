@@ -71,6 +71,10 @@ export interface GovernorConfig {
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
   rpcUrl?: string;
+  /** Maximum number of retry attempts for RPC calls (default: 3) */
+  maxAttempts?: number;
+  /** Base delay in milliseconds for exponential backoff (default: 1000) */
+  baseDelayMs?: number;
 }
 
 export interface TimelockOperation {
@@ -116,6 +120,10 @@ export interface FactoryConfig {
   factoryAddress: string;
   network: Network;
   rpcUrl?: string;
+  /** Maximum number of retry attempts for RPC calls (default: 3) */
+  maxAttempts?: number;
+  /** Base delay in milliseconds for exponential backoff (default: 1000) */
+  baseDelayMs?: number;
 }
 
 export interface GuardianActivityEntry {
@@ -211,6 +219,10 @@ export interface TreasuryConfig {
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
   rpcUrl?: string;
+  /** Maximum number of retry attempts for RPC calls (default: 3) */
+  maxAttempts?: number;
+  /** Base delay in milliseconds for exponential backoff (default: 1000) */
+  baseDelayMs?: number;
 }
 
 /** A single recipient in a batch transfer operation. */
