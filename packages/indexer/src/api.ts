@@ -4,6 +4,8 @@ import { pool } from "./db";
 import { cached, getMetrics } from "./cache";
 import { getLastIndexedLedger } from "./events";
 import { startTime } from "./index";
+import swaggerUi from "swagger-ui-express";
+import { generateOpenApiDocument } from "./openapi";
 
 const TTL = {
   proposals: 30_000,       // 30 seconds
@@ -74,6 +76,13 @@ async function getHealthStatus(server: SorobanRpc.Server): Promise<HealthRespons
 export function createApp(server: SorobanRpc.Server): express.Application {
   const app = express();
   app.use(express.json());
+
+  // Swagger documentation
+  app.get("/openapi.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.send(generateOpenApiDocument());
+  });
+  app.use("/docs", swaggerUi.serve, swaggerUi.setup(generateOpenApiDocument()));
 
   // GET /health
   app.get("/health", async (_req: Request, res: Response): Promise<void> => {
