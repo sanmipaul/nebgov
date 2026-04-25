@@ -11,6 +11,7 @@ fn build_checkpoints(env: &Env, count: usize) -> soroban_sdk::Vec<Checkpoint> {
         checkpoints.push_back(Checkpoint {
             ledger: i as u32,
             votes: (i as i128) * 10,
+            weighted_sum: (i as i128) * 10 * (i as i128),
         });
     }
     checkpoints
@@ -31,7 +32,7 @@ fn measure_query(checkpoints: &soroban_sdk::Vec<Checkpoint>, ledger: u32) -> (i1
     let mut budget = env.cost_estimate().budget();
     budget.reset_default();
     let result = TokenVotesContract::binary_search(checkpoints, ledger);
-    (result, budget.cpu_instruction_cost())
+    (result.votes, budget.cpu_instruction_cost())
 }
 
 fn run_scale_case(count: usize) -> u64 {
@@ -95,6 +96,7 @@ fn test_binary_search_edge_cases() {
     single.push_back(Checkpoint {
         ledger: 42,
         votes: 777,
+        weighted_sum: 42 * 777,
     });
 
     let (before_votes, _) = measure_query(&single, 41);

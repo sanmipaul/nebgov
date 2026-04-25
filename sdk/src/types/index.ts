@@ -165,14 +165,27 @@ export interface DelegateInfo {
   percentOfSupply: number;
 }
 
+export interface VotesSettings {
+  checkpointRetentionPeriod: number;
+  timeWeightEnabled: boolean;
+  timeWeightScale: number;
+}
+
+export interface DelegatorRecord {
+  balance: bigint;
+  startLedger: number;
+}
+
 // ─── Votes Analytics Types ────────────────────────────────────────────────────
 
 /** A delegate's summary as returned by {@link VotesClient.getTopDelegates}. */
 export interface TopDelegate {
   /** Stellar strkey address of the delegate */
   address: string;
-  /** Current voting power held by this delegate */
+  /** Current voting power held by this delegate (effective) */
   votingPower: bigint;
+  /** Base token votes (ignoring time-weight) */
+  baseVotes: bigint;
   /** Number of accounts currently delegating to this address */
   delegatorCount: number;
 }

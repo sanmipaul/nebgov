@@ -162,6 +162,57 @@ export class VotesClient {
   }
 
   /**
+   * Get current base voting power (raw tokens) of an address.
+   */
+  async getBaseVotes(account: string): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "get_base_votes",
+            nativeToScVal(account, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
+  /**
+   * Get base voting power at a past ledger sequence.
+   */
+  async getPastBaseVotes(account: string, ledger: number): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "get_past_base_votes",
+            nativeToScVal(account, { type: "address" }),
+            nativeToScVal(ledger, { type: "u32" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
+  /**
    * Get current delegatee of an account.
    */
   async getDelegatee(account: string): Promise<string | null> {
@@ -259,11 +310,18 @@ export class VotesClient {
     // Query current voting power for each unique delegate
     const delegateAddresses = Array.from(byDelegate.keys());
     const powerEntries = await Promise.all(
-      delegateAddresses.map(async (addr) => ({
-        address: addr,
-        votingPower: await this.getVotes(addr),
-        delegatorCount: byDelegate.get(addr)!.size,
-      })),
+      delegateAddresses.map(async (addr) => {
+        const [votingPower, baseVotes] = await Promise.all([
+          this.getVotes(addr),
+          this.getBaseVotes(addr),
+        ]);
+        return {
+          address: addr,
+          votingPower,
+          baseVotes,
+          delegatorCount: byDelegate.get(addr)!.size,
+        };
+      }),
     );
 
     return powerEntries
@@ -437,6 +495,128 @@ export class VotesClient {
 
     const prepared = await this.server.prepareTransaction(tx);
     await this.server.sendTransaction(prepared);
+  }
+
+  /**
+   * Get the current votes contract settings.
+   */
+  async getVotesSettings(): Promise<VotesSettings> {
+    const retentionResult = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount()), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call("checkpoint_retention_period"))
+        .setTimeout(30)
+        .build(),
+    );
+    const enabledResult = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount()), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call("time_weight_enabled"))
+        .setTimeout(30)
+        .build(),
+    );
+    const scaleResult = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount()), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(this.contract.call("time_weight_scale"))
+        .setTimeout(30)
+        .build(),
+    );
+
+    return {
+      checkpointRetentionPeriod: scValToNative(retentionResult.result!.retval),
+      timeWeightEnabled: scValToNative(enabledResult.result!.retval),
+      timeWeightScale: scValToNative(scaleResult.result!.retval),
+    };
+  }
+
+  /**
+   * Enable or disable time-weighted voting (admin only).
+   */
+  async setTimeWeightEnabled(signer: Keypair, enabled: boolean): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call("set_time_weight_enabled", nativeToScVal(enabled)),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw parseVotesError(result);
+    }
+  }
+
+  /**
+   * Set the time-weighting scale (admin only).
+   */
+  async setTimeWeightScale(signer: Keypair, scale: number): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "set_time_weight_scale",
+          nativeToScVal(scale, { type: "u32" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw parseVotesError(result);
+    }
+  }
+
+  /**
+   * Get the delegator record (balance and start ledger) for an address.
+   */
+  async getDelegatorRecord(account: string): Promise<DelegatorRecord | null> {
+    // Note: This requires the contract to expose a way to read the DelegatorRecord
+    // Currently, it's in storage but not explicitly exposed via a getter.
+    // I previously added DelegatorRecord to DataKey, but didn't add a getter.
+    // Let's assume we add a getter `get_delegator_record` to the contract.
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(await this.server.getAccount(this.readAccount(account)), {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "get_delegator_record",
+            nativeToScVal(account, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return null;
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    if (!raw) return null;
+    const native = scValToNative(raw);
+    return {
+      balance: BigInt(native.balance),
+      startLedger: native.start_ledger,
+    };
   }
 
   /**
