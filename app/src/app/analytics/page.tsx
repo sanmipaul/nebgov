@@ -69,6 +69,25 @@ export default function AnalyticsPage() {
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Analytics</h1>
           <p className="text-gray-500 dark:text-gray-400 mt-1">Participation and voting trends.</p>
         </div>
+        <div className="flex gap-3">
+          <a
+            href="/api/upgrade-history"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            Upgrade History
+          </a>
+          <span className="text-gray-400">|</span>
+          <a
+            href="/api/config-history"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            Config History
+          </a>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

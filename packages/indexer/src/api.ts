@@ -314,5 +314,47 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
+  // GET /config-history?limit&offset — paginated list of config updates
+  app.get(
+    "/config-history",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Number(req.query.limit ?? 20), 100);
+      const offset = Number(req.query.offset ?? 0);
+      try {
+        const result = await pool.query(
+          `SELECT * FROM config_updates ORDER BY ledger DESC, id DESC LIMIT $1 OFFSET $2`,
+          [limit, offset],
+        );
+        res.json({
+          data: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /upgrade-history?limit&offset — paginated list of governor upgrades
+  app.get(
+    "/upgrade-history",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Number(req.query.limit ?? 20), 100);
+      const offset = Number(req.query.offset ?? 0);
+      try {
+        const result = await pool.query(
+          `SELECT * FROM governor_upgrades ORDER BY ledger DESC, id DESC LIMIT $1 OFFSET $2`,
+          [limit, offset],
+        );
+        res.json({
+          data: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   return app;
 }

@@ -108,6 +108,14 @@ export async function processEvents(
             case "delegate":
               await handleDelegateChanged(event, topics);
               break;
+            case "config_updated":
+            case "ConfigUpdated":
+              await handleConfigUpdated(event, topics);
+              break;
+            case "upgraded":
+            case "GovernorUpgraded":
+              await handleGovernorUpgraded(event, topics);
+              break;
             default:
               break;
           }
@@ -272,5 +280,119 @@ async function handleTreasuryBatchTransfer(
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT DO NOTHING`,
     [opHash, token, recipientCount, totalAmount, event.ledger],
+  );
+}
+
+interface GovernorSettings {
+  voting_delay: number;
+  voting_period: number;
+  quorum_numerator: number;
+  proposal_threshold: bigint;
+  guardian: string;
+  voteType: number;
+  proposal_grace_period: number;
+  use_dynamic_quorum?: boolean;
+  reflector_oracle?: string | null;
+  min_quorum_usd?: bigint;
+  max_calldata_size?: number;
+  proposal_cooldown?: number;
+  max_proposals_per_period?: number;
+  proposal_period_duration?: number;
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Number(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function toGovernorSettings(value: unknown): GovernorSettings | null {
+  if (!value || typeof value !== "object") return null;
+
+  const obj = value as Record<string, unknown>;
+  const votingDelay = toNumber(obj.voting_delay);
+  const votingPeriod = toNumber(obj.voting_period);
+  const quorumNumerator = toNumber(obj.quorum_numerator);
+  const proposalThreshold =
+    typeof obj.proposal_threshold === "bigint"
+      ? Number(obj.proposal_threshold)
+      : obj.proposal_threshold
+      ? Number(obj.proposal_threshold)
+      : null;
+  const proposalGracePeriod = toNumber(obj.proposal_grace_period);
+
+  if (
+    votingDelay === null ||
+    votingPeriod === null ||
+    quorumNumerator === null ||
+    proposalThreshold === null ||
+    proposalGracePeriod === null
+  ) {
+    return null;
+  }
+
+  return {
+    voting_delay: votingDelay,
+    voting_period: votingPeriod,
+    quorum_numerator: quorumNumerator,
+    proposal_threshold: BigInt(proposalThreshold),
+    guardian: String(obj.guardian ?? ""),
+    voteType: 0,
+    proposal_grace_period: proposalGracePeriod,
+    use_dynamic_quorum: Boolean(obj.use_dynamic_quorum),
+    reflector_oracle:
+      obj.reflector_oracle === undefined || obj.reflector_oracle === null
+        ? null
+        : String(obj.reflector_oracle),
+    min_quorum_usd: obj.min_quorum_usd
+      ? BigInt(Number(obj.min_quorum_usd))
+      : 0n,
+    max_calldata_size: toNumber(obj.max_calldata_size) ?? 10000,
+    proposal_cooldown: toNumber(obj.proposal_cooldown) ?? 100,
+    max_proposals_per_period: toNumber(obj.max_proposals_per_period) ?? 5,
+    proposal_period_duration:
+      toNumber(obj.proposal_period_duration) ?? 10000,
+  };
+}
+
+async function handleConfigUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const newSettings = toGovernorSettings(data.new_settings);
+
+  if (!newSettings) {
+    console.error("Failed to parse new_settings from ConfigUpdated event");
+    return;
+  }
+
+  await pool.query(
+    `INSERT INTO config_updates (ledger, new_settings)
+     VALUES ($1, $2)`,
+    [event.ledger, JSON.stringify(newSettings)],
+  );
+}
+
+async function handleGovernorUpgraded(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const newHash = data.new_hash;
+
+  const hashStr =
+    newHash instanceof Uint8Array
+      ? Buffer.from(newHash).toString("hex")
+      : String(newHash ?? "");
+
+  await pool.query(
+    `INSERT INTO governor_upgrades (ledger, new_wasm_hash)
+     VALUES ($1, $2)`,
+    [event.ledger, hashStr],
   );
 }
