@@ -78,6 +78,32 @@ export class TreasuryClient {
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
   }
 
+  private async retry<T>(
+    fn: () => Promise<T>,
+    filter?: (e: unknown) => boolean,
+  ): Promise<T> {
+    return withRetry(fn, {
+      maxAttempts: this.config.maxAttempts,
+      baseDelayMs: this.config.baseDelayMs,
+      retryOn: filter ?? isNetworkError,
+    });
+  }
+
+  private isRetryableSubmissionError(e: unknown): boolean {
+    if (isNetworkError(e)) return true;
+    if (e instanceof TreasuryError) {
+      // Don't retry on contract logic errors (codes < 100)
+      return (
+        e.code >= 100 &&
+        e.code !== TreasuryErrorCode.TransactionFailed &&
+        e.code !== TreasuryErrorCode.MissingReturnValue
+      );
+    }
+    const msg = String(e);
+    if (msg.includes("TransactionAlreadyInMempool")) return false;
+    return false;
+  }
+
   /**
    * Disburse tokens to multiple recipients in a single transaction.
    *
@@ -110,9 +136,15 @@ export class TreasuryClient {
           `amount must be positive, got ${r.amount} for ${r.address}`,
         );
       }
-    }
 
-    const account = await this.server.getAccount(signer.publicKey());
+      for (const r of recipients) {
+        if (r.amount <= 0n) {
+          throw new TreasuryError(
+            TreasuryErrorCode.InvalidArguments,
+            `amount must be positive, got ${r.amount} for ${r.address}`,
+          );
+        }
+      }
 
     const recipientsScVal = xdr.ScVal.scvVec(
       recipients.map(encodeBatchRecipient),
@@ -133,13 +165,13 @@ export class TreasuryClient {
       .setTimeout(30)
       .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
 
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw parseTreasuryError(result);
-    }
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
 
     const confirmed = await this.pollForConfirmation(result.hash);
     const returnVal = confirmed.returnValue;
@@ -150,8 +182,9 @@ export class TreasuryClient {
       );
     }
 
-    const bytes = scValToNative(returnVal) as Uint8Array;
-    return Buffer.from(bytes).toString("hex");
+      const bytes = scValToNative(returnVal) as Uint8Array;
+      return Buffer.from(bytes).toString("hex");
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -199,13 +232,13 @@ export class TreasuryClient {
       .setTimeout(30)
       .build();
 
-    const prepared = await this.server.prepareTransaction(tx);
-    prepared.sign(signer);
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
 
-    const result = await this.server.sendTransaction(prepared);
-    if (result.status === "ERROR") {
-      throw parseTreasuryError(result);
-    }
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
 
     const confirmed = await this.pollForConfirmation(result.hash);
     const returnVal = confirmed.returnValue;
@@ -216,7 +249,8 @@ export class TreasuryClient {
       );
     }
 
-    return scValToNative(returnVal) as bigint;
+      return scValToNative(returnVal) as bigint;
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   // --- Internal ---
@@ -289,7 +323,7 @@ export class TreasuryClient {
   ): Promise<SorobanRpc.Api.GetSuccessfulTransactionResponse> {
     for (let i = 0; i < retries; i++) {
       await new Promise((r) => setTimeout(r, delayMs));
-      const status = await this.server.getTransaction(hash);
+      const status = await this.retry(() => this.server.getTransaction(hash));
       if (status.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
         return status as SorobanRpc.Api.GetSuccessfulTransactionResponse;
       }
