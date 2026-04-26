@@ -1,10 +1,13 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { NextIntlClientProvider } from "next-intl";
+import { getMessages } from "next-intl/server";
 import "./globals.css";
 import { NavBar } from "../components/NavBar";
 import { GovernorNotificationsProvider } from "../components/GovernorNotificationsProvider";
 import { WalletProvider } from "../lib/wallet-context";
 import { Toaster } from "react-hot-toast";
+import { getLocale } from "next-intl/server";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -14,13 +17,16 @@ export const metadata: Metadata = {
     "Permissionless on-chain governance for every Soroban protocol. Create proposals, vote, and execute decisions on-chain.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+
   return (
-    <html lang="en">
+    <html lang={locale}>
       <head>
         <script
           dangerouslySetInnerHTML={{
@@ -29,13 +35,15 @@ export default function RootLayout({
         />
       </head>
       <body className={`${inter.className} bg-gray-50 dark:bg-gray-900 min-h-screen`}>
-        <WalletProvider>
-          <GovernorNotificationsProvider>
-            <Toaster position="bottom-right" />
-            <NavBar />
-            <main className="pt-16">{children}</main>
-          </GovernorNotificationsProvider>
-        </WalletProvider>
+        <NextIntlClientProvider messages={messages}>
+          <WalletProvider>
+            <GovernorNotificationsProvider>
+              <Toaster position="bottom-right" />
+              <NavBar />
+              <main className="pt-16">{children}</main>
+            </GovernorNotificationsProvider>
+          </WalletProvider>
+        </NextIntlClientProvider>
       </body>
     </html>
   );

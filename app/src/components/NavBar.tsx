@@ -21,6 +21,7 @@ import {
   Settings,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
+import { useTranslations } from "next-intl";
 import toast from "react-hot-toast";
 import { loadNotificationHistory } from "../lib/governance-notifications";
 
@@ -35,6 +36,7 @@ const NAV_LINKS = [
 ];
 
 export function NavBar() {
+  const t = useTranslations("nav");
   const pathname = usePathname();
   const { address, publicKey, isConnected, isConnecting, connect, disconnect } =
     useWallet();
@@ -171,6 +173,24 @@ export function NavBar() {
               <Moon className="w-5 h-5" aria-hidden />
             )}
           </button>
+          <select
+            aria-label="Select language"
+            className="p-2 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs font-medium bg-transparent border-none cursor-pointer"
+            defaultValue="en"
+            onChange={(e) => {
+              const selectedLocale = e.target.value;
+              const cookies = document.cookie.split(";").reduce((acc, cookie) => {
+                const [key, value] = cookie.trim().split("=");
+                if (key !== "locale") acc.push(`${key}=${value}`);
+                return acc;
+              }, [] as string[]);
+              document.cookie = [...cookies, `locale=${selectedLocale}`].join("; ") + "; path=/";
+              window.location.reload();
+            }}
+          >
+            <option value="en">EN</option>
+            <option value="es" disabled>ES</option>
+          </select>
           <div className="hidden md:block relative">
             {isConnected ? (
               <div className="relative" ref={drawerRef}>
