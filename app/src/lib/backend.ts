@@ -47,3 +47,31 @@ export async function backendFetch<T>(
   return (await res.json()) as T;
 }
 
+export interface ProposalVote {
+  id: number;
+  proposal_id: number;
+  voter: string;
+  support: number;
+  weight: string;
+  created_at: string;
+}
+
+export interface VotesResponse {
+  votes: ProposalVote[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export async function fetchProposalVotes(
+  proposalId: string,
+  page: number = 0,
+  pageSize: number = 20,
+  sort: "newest" | "weight" | "address" = "newest"
+): Promise<VotesResponse> {
+  return backendFetch<VotesResponse>(
+    `/api/proposals/${proposalId}/votes?page=${page}&pageSize=${pageSize}&sort=${sort}`
+  );
+}
+

@@ -69,6 +69,37 @@ export function VotingModal({
 
   useEffect(() => setSupport(preselectedSupport ?? null), [preselectedSupport]);
 
+  // Focus management for modal
+  useEffect(() => {
+    if (open) {
+      // Focus the modal when it opens
+      const modal = document.getElementById('voting-modal');
+      if (modal) {
+        modal.focus();
+      }
+    }
+  }, [open]);
+
+  // Handle escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && open) {
+        onClose();
+      }
+    };
+    
+    if (open) {
+      document.addEventListener('keydown', handleEscape);
+      // Prevent body scroll when modal is open
+      document.body.style.overflow = 'hidden';
+    }
+    
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const tokenAmount = Number(votingPower) / 1e6;
@@ -124,14 +155,30 @@ export function VotingModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-lg shadow-xl">
+    <div 
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="voting-modal-title"
+      aria-describedby="voting-modal-description"
+    >
+      <div 
+        id="voting-modal"
+        className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-lg shadow-xl"
+        tabIndex={-1}
+      >
         <div className="flex items-start justify-between mb-3">
           <div>
-            <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">Cast Your Vote</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-300">Confirm and sign your vote on-chain.</p>
+            <h2 id="voting-modal-title" className="text-lg font-bold text-gray-900 dark:text-gray-100">Cast Your Vote</h2>
+            <p id="voting-modal-description" className="text-sm text-gray-500 dark:text-gray-300">Confirm and sign your vote on-chain.</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
+          <button 
+            onClick={onClose} 
+            className="text-gray-400 hover:text-gray-600 p-1 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Close voting modal"
+          >
+            ✕
+          </button>
         </div>
 
         {/* Delegation check */}
@@ -144,7 +191,8 @@ export function VotingModal({
               <p className="text-sm text-red-600">You have not delegated voting power yet.</p>
               <button
                 onClick={onOpenDelegate}
-                className="ml-auto text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50"
+                className="ml-auto text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                aria-label="Open delegation modal"
               >
                 Delegate now
               </button>
@@ -168,8 +216,10 @@ export function VotingModal({
                   Vote weight: {quadraticWeight!.toLocaleString()} (quadratic)
                 </p>
                 <span
-                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 text-[10px] cursor-help"
+                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 text-[10px] cursor-help focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   title="Quadratic voting: your vote weight is floor(√balance). A balance of 10,000 tokens gives a weight of 100, not 10,000. This reduces the influence of large token holders."
+                  aria-label="Quadratic voting explanation"
+                  tabIndex={0}
                 >
                   ?
                 </span>
@@ -189,42 +239,68 @@ export function VotingModal({
         </div>
 
         {/* Vote options */}
-        <div className="flex gap-3 mb-4">
-          {[
-            { label: "For", value: VoteSupport.For, color: "border-green-500 text-green-700" },
-            { label: "Against", value: VoteSupport.Against, color: "border-red-500 text-red-700" },
-            { label: "Abstain", value: VoteSupport.Abstain, color: "border-gray-400 text-gray-600" },
-          ].map(({ label, value, color }) => (
-            <button
-              key={label}
-              onClick={() => setSupport(value)}
-              className={`flex-1 border-2 rounded-lg py-2 text-sm font-medium transition-colors ${
-                support === value ? color + " bg-opacity-10" : "border-gray-200 text-gray-500"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <fieldset className="mb-4">
+          <legend className="sr-only">Vote options</legend>
+          <div className="flex gap-3" role="radiogroup" aria-label="Vote options">
+            {[
+              { label: "For", value: VoteSupport.For, color: "border-green-500 text-green-700 bg-green-50" },
+              { label: "Against", value: VoteSupport.Against, color: "border-red-500 text-red-700 bg-red-50" },
+              { label: "Abstain", value: VoteSupport.Abstain, color: "border-gray-400 text-gray-600 bg-gray-50" },
+            ].map(({ label, value, color }) => (
+              <button
+                key={label}
+                onClick={() => setSupport(value)}
+                className={`flex-1 border-2 rounded-lg py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                  support === value ? color : "border-gray-200 text-gray-500 hover:border-gray-300"
+                }`}
+                role="radio"
+                aria-checked={support === value}
+                aria-label={`Vote ${label}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
 
-        <label className="block text-sm text-gray-600 dark:text-gray-300 mb-2">Optional reason <span className="text-xs text-gray-400">(max 256)</span></label>
+        <label htmlFor="vote-reason" className="block text-sm text-gray-600 dark:text-gray-300 mb-2">
+          Optional reason <span className="text-xs text-gray-400">(max 256)</span>
+        </label>
         <textarea
+          id="vote-reason"
           value={reason}
           onChange={(e) => setReason(e.target.value.slice(0, 256))}
           placeholder="I support this because..."
-          className="w-full border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 mb-3"
+          className="w-full border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           rows={4}
+          aria-describedby="reason-help"
         />
+        <div id="reason-help" className="sr-only">
+          Optional field to provide reasoning for your vote. Maximum 256 characters.
+        </div>
+        
         <div className="flex items-center gap-3">
           <button
             onClick={handleConfirm}
             disabled={submitting || !isConnected || !delegatee}
-            className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60"
+            className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            aria-describedby={!delegatee ? "delegation-required" : undefined}
           >
             {submitting ? "Submitting vote..." : "Confirm & Sign"}
           </button>
-          <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-lg text-sm">Cancel</button>
+          <button 
+            onClick={onClose} 
+            className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            Cancel
+          </button>
         </div>
+        
+        {!delegatee && (
+          <div id="delegation-required" className="sr-only">
+            You must delegate your voting power before you can vote.
+          </div>
+        )}
       </div>
     </div>
   );

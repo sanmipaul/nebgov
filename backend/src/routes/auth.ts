@@ -1,10 +1,15 @@
 import { Router } from "express";
-import { body, validationResult } from "express-validator";
+import { z } from "zod";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import pool from "../db/pool";
+import { validate } from "../middleware/validate";
 
 const router = Router();
+
+const loginSchema = z.object({
+  wallet_address: z.string().trim().min(10).max(56),
+});
 
 const ACCESS_TOKEN_EXPIRY = "15m";
 const REFRESH_TOKEN_EXPIRY_DAYS = 7;
@@ -22,13 +27,8 @@ function generateRefreshToken(): string {
 // POST /auth/login - Wallet-signature-based login
 router.post(
   "/login",
-  body("wallet_address").isString().trim().isLength({ min: 10, max: 56 }),
+  validate({ body: loginSchema }),
   async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const walletAddress = (req.body.wallet_address as string).trim();
 
     try {

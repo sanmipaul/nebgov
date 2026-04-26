@@ -11,6 +11,7 @@ NebGov is a modular on-chain governance framework for Soroban. It is composed of
 - [Treasury Flows](./treasury.md)
 - [Liquidity Contract](./liquidity.md)
 - [Contract Upgrade Mechanism](#contract-upgrade-mechanism)
+- [Proposal States](./proposal-states.md)
 - [Security Considerations](#security-considerations)
 - [Architecture Decision Records](#architecture-decision-records)
 

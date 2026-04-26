@@ -1049,6 +1049,44 @@ export class GovernorClient {
     });
   }
 
+  /**
+   * Get a single proposal from the indexer API (fast path).
+   * Falls back to on-chain queries if indexer is unavailable.
+   * 
+   * @param proposalId The proposal ID to fetch
+   * @param indexerUrl Optional indexer API URL (defaults to environment variable)
+   * @returns The proposal data or null if not found
+   */
+  async getProposalFromIndexer(
+    proposalId: bigint, 
+    indexerUrl?: string
+  ): Promise<any | null> {
+    const url = indexerUrl || process.env.INDEXER_API_URL;
+    
+    if (!url) {
+      // No indexer configured, fall back to on-chain query
+      console.warn("No indexer URL configured, falling back to on-chain queries");
+      return null;
+    }
+
+    try {
+      const response = await fetch(`${url}/proposals/${proposalId}`);
+      
+      if (response.status === 404) {
+        return null;
+      }
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return await response.json();
+    } catch (error) {
+      console.warn(`Indexer query failed for proposal ${proposalId}:`, error);
+      return null;
+    }
+  }
+
   async getProposalExpiryLedger(proposalId: bigint): Promise<number> {
     const proposal = await this.getProposal(proposalId);
     const settings = await this.getSettings();

@@ -100,20 +100,110 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     }
   });
 
-  // GET /proposals?offset=0&limit=20
+  // GET /proposals?offset=0&limit=20 or ?before=47&limit=20 or ?after=10&limit=20
   app.get("/proposals", async (req: Request, res: Response): Promise<void> => {
-    const offset = Number(req.query.offset ?? 0);
     const limit = Math.min(Number(req.query.limit ?? 20), 100);
-    const key = `proposals:${offset}:${limit}`;
+    const before = req.query.before ? Number(req.query.before) : undefined;
+    const after = req.query.after ? Number(req.query.after) : undefined;
+    const offset = Number(req.query.offset ?? 0);
+
     try {
+      let query: string;
+      let params: any[];
+      let key: string;
+
+      // Use cursor-based pagination if before/after is provided
+      if (before !== undefined || after !== undefined) {
+        if (before !== undefined) {
+          // Fetch proposals with id < before
+          query = "SELECT * FROM proposals WHERE id < $1 ORDER BY id DESC LIMIT $2";
+          params = [before, limit];
+          key = `proposals:before:${before}:${limit}`;
+        } else {
+          // Fetch proposals with id > after
+          query = "SELECT * FROM proposals WHERE id > $1 ORDER BY id ASC LIMIT $2";
+          params = [after, limit];
+          key = `proposals:after:${after}:${limit}`;
+        }
+      } else {
+        // Fall back to offset-based pagination for backwards compatibility
+        query = "SELECT * FROM proposals ORDER BY id DESC LIMIT $1 OFFSET $2";
+        params = [limit, offset];
+        key = `proposals:${offset}:${limit}`;
+      }
+
       const data = await cached(key, TTL.proposals, async () => {
-        const result = await pool.query(
-          "SELECT * FROM proposals ORDER BY id DESC LIMIT $1 OFFSET $2",
-          [limit, offset],
-        );
-        return { proposals: result.rows, total: result.rowCount ?? 0 };
+        const result = await pool.query(query, params);
+        const proposals = result.rows;
+
+        // For cursor pagination, calculate next/prev cursors and hasMore
+        if (before !== undefined || after !== undefined) {
+          let nextCursor: number | undefined;
+          let prevCursor: number | undefined;
+          let hasMore = false;
+
+          if (proposals.length > 0) {
+            if (before !== undefined) {
+              // For "before" queries, next cursor is the smallest ID in results
+              nextCursor = Math.min(...proposals.map(p => p.id));
+              prevCursor = Math.max(...proposals.map(p => p.id));
+              
+              // Check if there are more proposals with smaller IDs
+              const hasMoreResult = await pool.query(
+                "SELECT 1 FROM proposals WHERE id < $1 LIMIT 1",
+                [nextCursor]
+              );
+              hasMore = hasMoreResult.rows.length > 0;
+            } else {
+              // For "after" queries, reverse the order to match DESC ordering
+              proposals.reverse();
+              nextCursor = Math.min(...proposals.map(p => p.id));
+              prevCursor = Math.max(...proposals.map(p => p.id));
+              
+              // Check if there are more proposals with larger IDs
+              const hasMoreResult = await pool.query(
+                "SELECT 1 FROM proposals WHERE id > $1 LIMIT 1",
+                [prevCursor]
+              );
+              hasMore = hasMoreResult.rows.length > 0;
+            }
+          }
+
+          return { 
+            proposals, 
+            nextCursor, 
+            prevCursor, 
+            hasMore 
+          };
+        } else {
+          // For offset pagination, return legacy format
+          return { proposals, total: result.rowCount ?? 0 };
+        }
       });
+
       res.json(data);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /proposals/:id
+  app.get("/proposals/:id", async (req: Request, res: Response): Promise<void> => {
+    const id = parseInt(req.params.id);
+    
+    // Validate ID is a valid integer
+    if (isNaN(id) || id < 1) {
+      res.status(400).json({ error: "Invalid proposal ID" });
+      return;
+    }
+
+    try {
+      const result = await pool.query('SELECT * FROM proposals WHERE id = $1', [id]);
+      if (!result.rows[0]) {
+        res.status(404).json({ error: 'Proposal not found' });
+        return;
+      }
+      res.json(result.rows[0]);
     } catch {
       res.status(500).json({ error: "Internal server error" });
     }
@@ -302,6 +392,48 @@ export function createApp(server: SorobanRpc.Server): express.Application {
       try {
         const result = await pool.query(
           `SELECT * FROM treasury_transfers ORDER BY ledger DESC, id DESC LIMIT $1 OFFSET $2`,
+          [limit, offset],
+        );
+        res.json({
+          data: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /config-history?limit&offset — paginated list of config updates
+  app.get(
+    "/config-history",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Number(req.query.limit ?? 20), 100);
+      const offset = Number(req.query.offset ?? 0);
+      try {
+        const result = await pool.query(
+          `SELECT * FROM config_updates ORDER BY ledger DESC, id DESC LIMIT $1 OFFSET $2`,
+          [limit, offset],
+        );
+        res.json({
+          data: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /upgrade-history?limit&offset — paginated list of governor upgrades
+  app.get(
+    "/upgrade-history",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Number(req.query.limit ?? 20), 100);
+      const offset = Number(req.query.offset ?? 0);
+      try {
+        const result = await pool.query(
+          `SELECT * FROM governor_upgrades ORDER BY ledger DESC, id DESC LIMIT $1 OFFSET $2`,
           [limit, offset],
         );
         res.json({

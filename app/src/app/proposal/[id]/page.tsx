@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { VoteSupport, ProposalState, VotesClient, GovernorClient, VoteType, type GovernorSettings, type Network } from "@nebgov/sdk";
-import { AlertTriangle, Info, ExternalLink, Loader2 } from "lucide-react";
+import { AlertTriangle, Info, ExternalLink, Loader2, ChevronUp, ChevronDown } from "lucide-react";
 import { useWallet } from "../../../lib/wallet-context";
 import { DelegateModal } from "../../../components/DelegateModal";
 import { VotingModal } from "../../../components/VotingModal";
 import { fetchProposalMetadata, verifyMetadataHash } from "../../../lib/metadata";
+import { fetchProposalVotes, type ProposalVote } from "../../../lib/backend";
 import {
   BarChart,
   Bar,
@@ -59,6 +60,44 @@ export default function ProposalDetailPage({ params }: Props) {
   const [voteError, setVoteError] = useState<string | null>(null);
   const [votedSupport, setVotedSupport] = useState<VoteSupport | null>(null);
   const [voteType, setVoteType] = useState<VoteType>(VoteType.Simple);
+
+  // Votes pagination
+  const [votes, setVotes] = useState<ProposalVote[]>([]);
+  const [votesPage, setVotesPage] = useState(0);
+  const [votesLoading, setVotesLoading] = useState(false);
+  const [votesTotal, setVotesTotal] = useState(0);
+  const [votesHasMore, setVotesHasMore] = useState(false);
+  const [votesSort, setVotesSort] = useState<"newest" | "weight" | "address">("newest");
+
+  const loadVotes = useCallback(async (pageNum: number, append = false) => {
+    setVotesLoading(true);
+    try {
+      const result = await fetchProposalVotes(
+        params.id,
+        pageNum,
+        20,
+        votesSort
+      );
+      if (append) {
+        setVotes((prev) => [...prev, ...result.votes]);
+      } else {
+        setVotes(result.votes);
+      }
+      setVotesTotal(result.total);
+      setVotesHasMore(result.hasMore);
+    } catch (err) {
+      console.error("Failed to load votes:", err);
+    } finally {
+      setVotesLoading(false);
+    }
+  }, [params.id, votesSort]);
+
+  const loadMoreVotes = () => {
+    if (!votesLoading && votesHasMore) {
+      loadVotes(votesPage + 1, true);
+      setVotesPage((p) => p + 1);
+    }
+  };
 
   const { publicKey, isConnected, signTransaction } = useWallet();
   const { theme } = useTheme();
@@ -150,6 +189,10 @@ export default function ProposalDetailPage({ params }: Props) {
       refreshDelegation();
     }
   }, [isConnected, votesClient, publicKey]);
+
+  useEffect(() => {
+    loadVotes(0, false);
+  }, [loadVotes]);
 
   // Transform data for Recharts
   const chartData = useMemo(() => [
@@ -493,6 +536,81 @@ export default function ProposalDetailPage({ params }: Props) {
           </p>
         </div>
       )}
+
+      {/* Votes List with Pagination */}
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mt-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+            Votes
+          </h2>
+          <span className="text-xs text-gray-400">
+            Showing {votes.length} of {votesTotal} votes
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs text-gray-500">Sort by:</span>
+          <button
+            onClick={() => { setVotesSort("newest"); setVotesPage(0); }}
+            className={`px-2 py-1 text-xs rounded ${votesSort === "newest" ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-700"}`}
+          >
+            Newest
+          </button>
+          <button
+            onClick={() => { setVotesSort("weight"); setVotesPage(0); }}
+            className={`px-2 py-1 text-xs rounded ${votesSort === "weight" ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-700"}`}
+          >
+            Weight
+          </button>
+          <button
+            onClick={() => { setVotesSort("address"); setVotesPage(0); }}
+            className={`px-2 py-1 text-xs rounded ${votesSort === "address" ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-700"}`}
+          >
+            Address
+          </button>
+        </div>
+
+        {votesLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+          </div>
+        ) : votes.length === 0 ? (
+          <p className="text-gray-400 text-sm py-8 text-center">No votes yet</p>
+        ) : (
+          <ul className="space-y-2">
+            {votes.map((vote) => (
+              <li
+                key={vote.id}
+                className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-sm">{vote.voter.slice(0, 6)}...{vote.voter.slice(-4)}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded ${
+                    vote.support === 1 ? "bg-green-100 text-green-700" :
+                    vote.support === 2 ? "bg-red-100 text-red-700" :
+                    "bg-gray-200 text-gray-600"
+                  }`}>
+                    {vote.support === 1 ? "For" : vote.support === 2 ? "Against" : "Abstain"}
+                  </span>
+                </div>
+                <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
+                  {(Number(vote.weight) / 10 ** 7).toLocaleString()} NEB
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {votesHasMore && (
+          <button
+            onClick={loadMoreVotes}
+            disabled={votesLoading}
+            className="w-full mt-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {votesLoading ? "Loading..." : "Load more"}
+          </button>
+        )}
+      </div>
 
       <DelegateModal
         isOpen={delegateModalOpen}

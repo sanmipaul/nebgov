@@ -16,6 +16,8 @@ import {
   TopDelegate,
   VotingPowerDistribution,
   DelegatorInfo,
+  VotesSettings,
+  DelegatorRecord,
 } from "./types";
 import { VotesError, VotesErrorCode, parseVotesError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
@@ -570,10 +572,20 @@ export class VotesClient {
         .build(),
     );
 
+    if (SorobanRpc.Api.isSimulationError(retentionResult)) {
+      throw new VotesError(VotesErrorCode.SimulationFailed, "Failed to get checkpoint retention period");
+    }
+    if (SorobanRpc.Api.isSimulationError(enabledResult)) {
+      throw new VotesError(VotesErrorCode.SimulationFailed, "Failed to get time weight enabled");
+    }
+    if (SorobanRpc.Api.isSimulationError(scaleResult)) {
+      throw new VotesError(VotesErrorCode.SimulationFailed, "Failed to get time weight scale");
+    }
+
     return {
-      checkpointRetentionPeriod: scValToNative(retentionResult.result!.retval),
-      timeWeightEnabled: scValToNative(enabledResult.result!.retval),
-      timeWeightScale: scValToNative(scaleResult.result!.retval),
+      checkpointRetentionPeriod: scValToNative((retentionResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval),
+      timeWeightEnabled: scValToNative((enabledResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval),
+      timeWeightScale: scValToNative((scaleResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval),
     };
   }
 

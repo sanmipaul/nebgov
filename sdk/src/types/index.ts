@@ -236,6 +236,10 @@ export interface TreasuryConfig {
   rpcUrl?: string;
   /** Indexer base URL for off-chain queries (e.g. getBatchTransferHistory) */
   indexerUrl?: string;
+  /** Maximum retry attempts for failed operations (default: 3) */
+  maxAttempts?: number;
+  /** Base delay between retries in milliseconds (default: 1000) */
+  baseDelayMs?: number;
 }
 
 /** A single recipient in a batch transfer operation. */

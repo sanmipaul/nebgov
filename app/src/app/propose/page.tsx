@@ -31,6 +31,7 @@ const TITLE_MIN = 10;
 const TITLE_MAX = 100;
 const DESC_MIN = 20;
 const STORAGE_KEY = "nebgov_proposal_draft";
+const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 const STEPS = [
   { id: 1, label: "Content" },
@@ -54,6 +55,8 @@ interface DraftState {
   descriptionHash: string;
   ipfsRef: string;
   actions: WizardAction[];
+  savedAt: number;
+  currentStep: number;
 }
 
 function newAction(): WizardAction {
@@ -131,7 +134,12 @@ function ProposeWizardInner() {
     descriptionHash: "",
     ipfsRef: "",
     actions: [],
+    savedAt: 0,
+    currentStep: 1,
   });
+  const [savedDraftExists, setSavedDraftExists] = useState(false);
+  const [savedDraftData, setSavedDraftData] = useState<DraftState | null>(null);
+  const [showRestoreBanner, setShowRestoreBanner] = useState(false);
 
   const [isHashing, setIsHashing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -151,10 +159,18 @@ function ProposeWizardInner() {
 
   // Hydration / Persistence
   useEffect(() => {
-    const saved = sessionStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        setDraft(JSON.parse(saved));
+        const parsed = JSON.parse(saved) as DraftState;
+        const now = Date.now();
+        if (now - parsed.savedAt < DRAFT_EXPIRY_MS) {
+          setSavedDraftData(parsed);
+          setSavedDraftExists(true);
+          setShowRestoreBanner(true);
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+        }
       } catch (e) {
         console.error("Failed to load draft:", e);
       }
@@ -162,10 +178,42 @@ function ProposeWizardInner() {
     setHydrated(true);
   }, []);
 
+  const restoreDraft = useCallback(() => {
+    if (savedDraftData) {
+      setDraft(savedDraftData);
+      const q = new URLSearchParams(searchParams.toString());
+      q.set("step", String(savedDraftData.currentStep || 1));
+      if (savedDraftData.currentStep !== 4) q.delete("id");
+      router.push(`/propose?${q.toString()}`);
+      setShowRestoreBanner(false);
+    }
+  }, [savedDraftData, router, searchParams]);
+
+  const discardDraft = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    setSavedDraftData(null);
+    setSavedDraftExists(false);
+    setShowRestoreBanner(false);
+    setDraft({
+      title: "",
+      description: "",
+      descriptionHash: "",
+      ipfsRef: "",
+      actions: [],
+      savedAt: 0,
+      currentStep: 1,
+    });
+  }, []);
+
   useEffect(() => {
     if (!hydrated) return;
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
-  }, [draft, hydrated]);
+    const draftWithTimestamp: DraftState = {
+      ...draft,
+      savedAt: Date.now(),
+      currentStep: step,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(draftWithTimestamp));
+  }, [draft, hydrated, step]);
 
   // Auto-hash description when it changes
   useEffect(() => {
@@ -373,7 +421,8 @@ function ProposeWizardInner() {
         signTransaction,
       );
       sessionStorage.removeItem(STORAGE_KEY);
-      setDraft({ title: "", description: "", descriptionHash: "", ipfsRef: "", actions: [] });
+      localStorage.removeItem(STORAGE_KEY);
+      setDraft({ title: "", description: "", descriptionHash: "", ipfsRef: "", actions: [], savedAt: 0, currentStep: 1 });
       router.push(`/propose?step=4&id=${id.toString()}`);
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : "Submit failed");
@@ -442,6 +491,32 @@ function ProposeWizardInner() {
       <p className="text-gray-500 dark:text-gray-400 mb-8">
         Step-by-step flow with validation, previews, and on-chain simulation.
       </p>
+
+      {/* Restore Draft Banner */}
+      {showRestoreBanner && savedDraftData && (
+        <div className="mb-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-amber-800 dark:text-amber-200 text-sm">
+              You have an unsaved draft from{" "}
+              {new Date(savedDraftData.savedAt).toLocaleDateString()}. Restore it?
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={restoreDraft}
+              className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              Restore
+            </button>
+            <button
+              onClick={discardDraft}
+              className="px-4 py-2 text-gray-600 dark:text-gray-300 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            >
+              Discard
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Progress */}
       <ol className="flex items-center gap-2 mb-10 text-sm">

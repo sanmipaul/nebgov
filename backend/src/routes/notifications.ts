@@ -1,7 +1,8 @@
 import { Response, Router } from "express";
-import { body, query, validationResult } from "express-validator";
+import { z } from "zod";
 import pool from "../db/pool";
 import { authenticate, AuthRequest } from "../middleware/auth";
+import { validate } from "../middleware/validate";
 
 const router = Router();
 
@@ -27,6 +28,32 @@ function defaultPreferences() {
   };
 }
 
+const preferencesSchema = z.object({
+  created_self: z.boolean().optional(),
+  active: z.boolean().optional(),
+  voting_ends_soon: z.boolean().optional(),
+  outcome: z.boolean().optional(),
+  queued: z.boolean().optional(),
+  executed: z.boolean().optional(),
+});
+
+const listNotificationsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional().default(100),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+  unread_only: z.enum(["true", "false"]).transform(v => v === "true").optional().default("false" as any),
+});
+
+const createNotificationSchema = z.object({
+  type: z.string().trim().min(1).max(64),
+  proposal_id: z.coerce.number().int().min(0).optional(),
+  message: z.string().optional(),
+});
+
+const markReadSchema = z.object({
+  ids: z.array(z.coerce.number().int()).optional(),
+  all: z.boolean().optional(),
+});
+
 // GET /notifications/preferences - get current preferences (auth required)
 router.get("/preferences", authenticate, async (req: AuthRequest, res) => {
   try {
@@ -46,12 +73,8 @@ router.get("/preferences", authenticate, async (req: AuthRequest, res) => {
 router.post(
   "/preferences",
   authenticate,
-  ...PREF_KEYS.map((k) => body(k).optional().isBoolean()),
+  validate({ body: preferencesSchema }),
   async (req: AuthRequest, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
 
     const userId = req.userId!;
     const next: Record<PrefKey, boolean> = defaultPreferences();
@@ -80,21 +103,10 @@ router.post(
 router.get(
   "/",
   authenticate,
-  [
-    query("limit").optional().isInt({ min: 1, max: 200 }).toInt(),
-    query("offset").optional().isInt({ min: 0 }).toInt(),
-    query("unread_only").optional().isBoolean().toBoolean(),
-  ],
+  validate({ query: listNotificationsSchema }),
   async (req: AuthRequest, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const userId = req.userId!;
-    const limit = (req.query.limit as number | undefined) ?? 100;
-    const offset = (req.query.offset as number | undefined) ?? 0;
-    const unreadOnly = (req.query.unread_only as boolean | undefined) ?? false;
+    const { limit, offset, unread_only: unreadOnly } = req.query as any;
 
     try {
       const whereUnread = unreadOnly ? "AND read = false" : "";
@@ -135,14 +147,8 @@ router.get(
 router.post(
   "/",
   authenticate,
-  body("type").isString().trim().isLength({ min: 1, max: 64 }),
-  body("proposal_id").optional().isInt({ min: 0 }).toInt(),
-  body("message").optional().isString(),
+  validate({ body: createNotificationSchema }),
   async (req: AuthRequest, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
 
     const userId = req.userId!;
     const type = (req.body.type as string).trim();
@@ -168,14 +174,8 @@ router.post(
 router.post(
   "/mark-read",
   authenticate,
-  body("ids").optional().isArray({ min: 1 }),
-  body("ids.*").optional().isInt().toInt(),
-  body("all").optional().isBoolean(),
+  validate({ body: markReadSchema }),
   async (req: AuthRequest, res: Response) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
 
     const userId = req.userId!;
     const markAll = req.body.all === true;
@@ -207,4 +207,3 @@ router.post(
 );
 
 export default router;
-

@@ -80,9 +80,9 @@ app.use(globalLimiter);
 
 // Routes
 app.use("/auth", authRouter);
-app.use("/competitions", competitionsRouter);
 app.post("/competitions/:id/join", joinLimiter);
 app.post("/competitions/:id/leave", joinLimiter);
+app.use("/competitions", competitionsRouter);
 app.use("/leaderboard/history", leaderboardLimiter);
 app.use("/leaderboard", leaderboardRouter);
 app.use("/notifications", notificationsRouter);

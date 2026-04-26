@@ -93,5 +93,22 @@ export async function initDb(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_wrapper_deposits_account ON wrapper_deposits(account);
     CREATE INDEX IF NOT EXISTS idx_wrapper_withdrawals_account ON wrapper_withdrawals(account);
+
+    CREATE TABLE IF NOT EXISTS config_updates (
+      id SERIAL PRIMARY KEY,
+      ledger INT NOT NULL,
+      new_settings JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS governor_upgrades (
+      id SERIAL PRIMARY KEY,
+      ledger INT NOT NULL,
+      new_wasm_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_config_updates_ledger ON config_updates(ledger DESC);
+    CREATE INDEX IF NOT EXISTS idx_governor_upgrades_ledger ON governor_upgrades(ledger DESC);
   `);
 }
