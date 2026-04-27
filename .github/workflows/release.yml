@@ -1,0 +1,37 @@
+name: Release SDK
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Publish SDK to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build SDK
+        run: pnpm build:sdk
+
+      - name: Test SDK
+        run: pnpm test:sdk
+
+      - name: Publish to npm
+        run: pnpm publish sdk/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
