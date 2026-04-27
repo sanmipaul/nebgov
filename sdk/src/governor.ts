@@ -1160,6 +1160,186 @@ export class GovernorClient {
     return results;
   }
 
+  /**
+   * List proposals created by a given address by scanning `ProposalCreated`
+   * (and legacy `prop_crtd`) events and then fetching each proposal/state.
+   *
+   * Results are sorted newest first.
+   */
+  async getProposalsForAddress(
+    proposer: string,
+    opts?: { fromLedger?: number; limit?: number },
+  ): Promise<Array<{ id: bigint; proposal: Proposal; state: ProposalState }>> {
+    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+    const contractId = this.contract.contractId();
+    const proposerTopic = nativeToScVal(proposer, { type: "address" }).toXDR(
+      "base64",
+    );
+
+    const topicVectors = [
+      [
+        xdr.ScVal.scvSymbol("ProposalCreated").toXDR("base64"),
+        proposerTopic,
+      ],
+      [xdr.ScVal.scvSymbol("prop_crtd").toXDR("base64"), proposerTopic],
+    ];
+
+    const latest = await this.getLatestLedger();
+    let startLedger = opts?.fromLedger ?? 1;
+    if (startLedger < 1) startLedger = 1;
+
+    const proposalIds: Array<{ id: bigint; ledger: number }> = [];
+
+    for (const topics of topicVectors) {
+      let cursor = startLedger;
+      while (cursor <= latest) {
+        const response = await this.retry(async () => {
+          return await this.server.getEvents({
+            startLedger: cursor,
+            filters: [
+              {
+                type: "contract",
+                contractIds: [contractId],
+                topics: [topics],
+              },
+            ],
+            limit: 100,
+          });
+        }, this.isNetworkError.bind(this));
+
+        const events = response.events ?? [];
+        if (events.length === 0) break;
+
+        let maxLedger = cursor;
+        for (const event of events) {
+          try {
+            const symbol = scValToNative(event.topic[0]);
+            const value = scValToNative(event.value) as any;
+            const proposalIdRaw =
+              symbol === "ProposalCreated"
+                ? value?.proposal_id
+                : Array.isArray(value)
+                  ? value[0]
+                  : undefined;
+
+            const id = BigInt(proposalIdRaw as number | bigint | string);
+            proposalIds.push({ id, ledger: event.ledger });
+          } catch {
+            // ignore malformed event
+          }
+          if (event.ledger > maxLedger) maxLedger = event.ledger;
+        }
+
+        cursor = maxLedger + 1;
+      }
+    }
+
+    const uniq = new Map<string, { id: bigint; ledger: number }>();
+    for (const entry of proposalIds) {
+      const key = entry.id.toString();
+      const prev = uniq.get(key);
+      if (!prev || entry.ledger > prev.ledger) uniq.set(key, entry);
+    }
+
+    const newestFirst = Array.from(uniq.values())
+      .sort((a, b) => b.ledger - a.ledger)
+      .slice(0, limit);
+
+    const hydrated = await Promise.all(
+      newestFirst.map(async ({ id }) => {
+        const [proposal, state] = await Promise.all([
+          this.getProposal(id),
+          this.getProposalState(id),
+        ]);
+        return { id, proposal, state };
+      }),
+    );
+
+    return hydrated;
+  }
+
+  /**
+   * Return recent on-chain votes cast by a voter by scanning `VoteCast` events.
+   * Useful for profile pages without requiring an indexer endpoint.
+   */
+  async getVotesCastByAddress(
+    voter: string,
+    opts?: { fromLedger?: number; limit?: number },
+  ): Promise<
+    Array<{
+      proposalId: bigint;
+      support: VoteSupport;
+      weight: bigint;
+      ledger: number;
+    }>
+  > {
+    const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
+    const contractId = this.contract.contractId();
+    const topic = [
+      xdr.ScVal.scvSymbol("VoteCast").toXDR("base64"),
+      nativeToScVal(voter, { type: "address" }).toXDR("base64"),
+    ];
+
+    const latest = await this.getLatestLedger();
+    let cursor = opts?.fromLedger ?? 1;
+    if (cursor < 1) cursor = 1;
+
+    const results: Array<{
+      proposalId: bigint;
+      support: VoteSupport;
+      weight: bigint;
+      ledger: number;
+    }> = [];
+
+    while (cursor <= latest) {
+      const response = await this.retry(async () => {
+        return await this.server.getEvents({
+          startLedger: cursor,
+          filters: [
+            {
+              type: "contract",
+              contractIds: [contractId],
+              topics: [topic],
+            },
+          ],
+          limit: 100,
+        });
+      }, this.isNetworkError.bind(this));
+
+      const events = response.events ?? [];
+      if (events.length === 0) break;
+
+      let maxLedger = cursor;
+      for (const event of events) {
+        try {
+          const value = scValToNative(event.value) as any;
+          const proposalId = BigInt(value?.proposal_id);
+          const supportRaw = Number(value?.support);
+          const weight = BigInt(value?.weight ?? 0);
+
+          const support =
+            supportRaw === 0
+              ? VoteSupport.Against
+              : supportRaw === 1
+                ? VoteSupport.For
+                : VoteSupport.Abstain;
+
+          results.push({ proposalId, support, weight, ledger: event.ledger });
+        } catch {
+          // ignore malformed event
+        }
+        if (event.ledger > maxLedger) maxLedger = event.ledger;
+      }
+
+      if (results.length >= limit) break;
+      cursor = maxLedger + 1;
+    }
+
+    return results
+      .sort((a, b) => b.ledger - a.ledger)
+      .slice(0, limit);
+  }
+
   async getLastProposalLedger(address: string): Promise<number> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(

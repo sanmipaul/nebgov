@@ -368,16 +368,56 @@ export class VotesClient {
    * contract to discover all accounts that have ever delegated, then queries
    * their current voting power and returns the top `limit` entries.
    *
-   * @param limit      - Maximum number of delegates to return
-   * @param fromLedger - Earliest ledger to scan events from. Defaults to the
-   *                     current ledger minus {@link DEFAULT_SCAN_WINDOW}.
+   * Backwards-compatible overload:
+   * - `getTopDelegates(limit, fromLedger?)` returns `TopDelegate[]`
+   *
+   * Cursor-based overload:
+   * - `getTopDelegates({ limit, fromLedger, cursor, maxEventsToScan, delegationMap })`
+   *   returns `{ delegates, nextCursor, delegationMap }`
+   *
+   * The cursor is an opaque string produced by this method; callers should
+   * persist and pass it back to scan only new events incrementally.
    */
   async getTopDelegates(
     limit: number,
     fromLedger?: number,
-  ): Promise<TopDelegate[]> {
-    const delegationMap = await this.buildDelegationMap(fromLedger);
-    if (delegationMap.size === 0) return [];
+  ): Promise<TopDelegate[]>;
+  async getTopDelegates(options?: TopDelegatesOptions): Promise<TopDelegatesResult>;
+  async getTopDelegates(
+    arg1?: number | TopDelegatesOptions,
+    arg2?: number,
+  ): Promise<TopDelegate[] | TopDelegatesResult> {
+    // Legacy signature: (limit, fromLedger?)
+    if (typeof arg1 === "number") {
+      const { delegates } = await this.getTopDelegates({
+        limit: arg1,
+        fromLedger: arg2,
+      });
+      return delegates;
+    }
+
+    const options = arg1 ?? {};
+    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+
+    const delegationMap =
+      options.delegationMap ??
+      new Map<string, string>();
+
+    const { nextCursor } = await this.buildDelegationMapIncremental({
+      fromLedger: options.fromLedger,
+      cursor: options.cursor,
+      maxEventsToScan: options.maxEventsToScan,
+      delegationMap,
+    });
+
+    if (delegationMap.size === 0) {
+      const empty: TopDelegatesResult = {
+        delegates: [],
+        nextCursor,
+        delegationMap,
+      };
+      return empty;
+    }
 
     // Group delegators by their current delegatee
     const byDelegate = new Map<string, Set<string>>();
@@ -403,7 +443,7 @@ export class VotesClient {
       }),
     );
 
-    return powerEntries
+    const delegates = powerEntries
       .filter((d) => d.votingPower > 0n)
       .sort((a, b) =>
         b.votingPower > a.votingPower
@@ -413,6 +453,14 @@ export class VotesClient {
             : 0,
       )
       .slice(0, limit);
+
+    const result: TopDelegatesResult = {
+      delegates,
+      nextCursor,
+      delegationMap,
+    };
+
+    return result;
   }
 
   /**
@@ -756,7 +804,54 @@ export class VotesClient {
   private async buildDelegationMap(
     fromLedger?: number,
   ): Promise<Map<string, string>> {
-    let startLedger = fromLedger;
+    const delegationMap = new Map<string, string>();
+    await this.buildDelegationMapIncremental({
+      fromLedger,
+      delegationMap,
+    });
+    return delegationMap;
+  }
+
+  private encodeDelegationCursor(nextStartLedger: number): string {
+    const payload = JSON.stringify({ nextStartLedger });
+    if (typeof Buffer !== "undefined") {
+      return Buffer.from(payload, "utf8").toString("base64");
+    }
+    // Browser fallback
+    return btoa(unescape(encodeURIComponent(payload)));
+  }
+
+  private decodeDelegationCursor(cursor: string): number | null {
+    try {
+      const raw =
+        typeof Buffer !== "undefined"
+          ? Buffer.from(cursor, "base64").toString("utf8")
+          : decodeURIComponent(escape(atob(cursor)));
+      const parsed = JSON.parse(raw) as { nextStartLedger?: unknown };
+      const next = Number(parsed.nextStartLedger);
+      return Number.isFinite(next) && next > 0 ? Math.floor(next) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async buildDelegationMapIncremental({
+    fromLedger,
+    cursor,
+    maxEventsToScan,
+    delegationMap,
+  }: {
+    fromLedger?: number;
+    cursor?: string;
+    maxEventsToScan?: number;
+    delegationMap: Map<string, string>;
+  }): Promise<{ nextCursor: string | null }> {
+    let startLedger: number | undefined = fromLedger;
+    if (cursor) {
+      const decoded = this.decodeDelegationCursor(cursor);
+      if (decoded) startLedger = decoded;
+    }
+
     if (startLedger === undefined) {
       const info = await this.retry(() => this.server.getLatestLedger());
       startLedger = Math.max(1, info.sequence - DEFAULT_SCAN_WINDOW);
@@ -767,16 +862,23 @@ export class VotesClient {
       xdr.ScVal.scvSymbol("del_chsh"),
       xdr.ScVal.scvSymbol("del_revk"),
     ];
-    const delegationMap = new Map<string, string>();
+
+    const scanCap =
+      maxEventsToScan === undefined
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, Math.floor(maxEventsToScan));
 
     try {
-      let cursor = startLedger;
+      let cursorLedger = startLedger;
       const latest = (await this.server.getLatestLedger()).sequence;
+      let scanned = 0;
 
-      while (cursor <= latest) {
+      while (cursorLedger <= latest && scanned < scanCap) {
+        const remaining = scanCap - scanned;
+        const limit = Math.max(1, Math.min(100, remaining));
         const response = await this.retry(() =>
           this.server.getEvents({
-            startLedger: cursor,
+            startLedger: cursorLedger,
             filters: [
               {
                 type: "contract",
@@ -784,14 +886,19 @@ export class VotesClient {
                 topics: [topicFilter.map((v) => v.toXDR("base64"))],
               },
             ],
-            limit: 100,
+            limit,
           }),
         );
 
         const events = response.events ?? [];
-        let maxLedger = cursor;
+        if (events.length === 0) {
+          return { nextCursor: null };
+        }
+
+        let maxLedger = cursorLedger;
 
         for (const event of events) {
+          scanned += 1;
           try {
             const symbol = scValToNative(event.topic[0]);
             const delegator = scValToNative(event.topic[1]) as string;
@@ -818,9 +925,11 @@ export class VotesClient {
           if (event.ledger > maxLedger) maxLedger = event.ledger;
         }
 
-        if (events.length === 0) break;
-        cursor = maxLedger + 1;
+        cursorLedger = maxLedger + 1;
       }
+
+      if (cursorLedger > latest) return { nextCursor: null };
+      return { nextCursor: this.encodeDelegationCursor(cursorLedger) };
     } catch (err) {
       throw new VotesError(
         VotesErrorCode.EventScanFailed,
@@ -828,9 +937,29 @@ export class VotesClient {
         err,
       );
     }
-
-    return delegationMap;
   }
+}
+
+export interface TopDelegatesOptions {
+  /** Maximum number of delegates to return (default 20). */
+  limit?: number;
+  /** Earliest ledger to scan events from (default latest - DEFAULT_SCAN_WINDOW). */
+  fromLedger?: number;
+  /** Opaque pagination cursor returned by a prior call. */
+  cursor?: string;
+  /** Safety cap to prevent unbounded scans. */
+  maxEventsToScan?: number;
+  /**
+   * Optional delegation map to reuse across calls.
+   * Pass the returned map back in to avoid rebuilding from scratch.
+   */
+  delegationMap?: Map<string, string>;
+}
+
+export interface TopDelegatesResult {
+  delegates: TopDelegate[];
+  nextCursor: string | null;
+  delegationMap: Map<string, string>;
 }
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────

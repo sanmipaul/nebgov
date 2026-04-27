@@ -17,44 +17,33 @@ import {
   Legend,
 } from "recharts";
 import { useTheme } from "../../hooks/useTheme";
-
-const stats = {
-  total: 124,
-  passed: 78,
-  failed: 32,
-  pending: 14,
-  avgParticipation: 12.4,
-  delegationRate: 24.5,
-};
-
-const participationData = [
-  { date: "Jan", votes: 10 },
-  { date: "Feb", votes: 20 },
-  { date: "Mar", votes: 14 },
-  { date: "Apr", votes: 30 },
-  { date: "May", votes: 22 },
-  { date: "Jun", votes: 28 },
-];
-
-const outcomeData = [
-  { name: "Passed", value: stats.passed },
-  { name: "Failed", value: stats.failed },
-  { name: "Pending", value: stats.pending },
-];
-
-const topDelegates = [
-  { name: "Delegate A", votes: 120 },
-  { name: "Delegate B", votes: 95 },
-  { name: "Delegate C", votes: 78 },
-  { name: "Delegate D", votes: 55 },
-  { name: "Delegate E", votes: 40 },
-];
+import { useEffect, useMemo, useState } from "react";
+import { Network, VotesClient } from "@nebgov/sdk";
 
 const COLORS = ["#60a5fa", "#34d399", "#f97316", "#f87171", "#a78bfa"];
+
+type TimeRange = "7d" | "30d" | "all";
+
+function Skeleton({ className }: { className?: string }) {
+  return <div className={`bg-gray-200 dark:bg-gray-700 animate-pulse rounded ${className ?? ""}`} />;
+}
 
 export default function AnalyticsPage() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const [timeRange, setTimeRange] = useState<TimeRange>("30d");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [proposals, setProposals] = useState<any[]>([]);
+  const [topDelegates, setTopDelegates] = useState<Array<{ name: string; votes: number }>>([]);
+  const [summary, setSummary] = useState<{
+    totalProposals: number;
+    totalUniqueVoters: number;
+    averageVotesPerProposal: number;
+    mostActiveProposers: Array<{ proposer: string; count: number }>;
+    outcomes: { executed: number; cancelled: number; queued: number };
+  } | null>(null);
+  const [totalSupply, setTotalSupply] = useState<bigint>(0n);
 
   const chartTheme = {
     textColor: isDark ? "#94a3b8" : "#64748b",
@@ -62,6 +51,149 @@ export default function AnalyticsPage() {
     tooltipBg: isDark ? "#1f2937" : "#ffffff",
     tooltipBorder: isDark ? "#374151" : "#e5e7eb",
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchAll() {
+      setLoading(true);
+      setError(null);
+      try {
+        const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
+        const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
+        const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
+        const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+        const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
+        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+
+        if (!indexerUrl) {
+          throw new Error("Missing NEXT_PUBLIC_INDEXER_URL. Analytics requires the indexer API.");
+        }
+        if (!governorAddress || !timelockAddress || !votesAddress) {
+          throw new Error("Missing required environment variables. Please check .env.local configuration.");
+        }
+
+        const votesClient = new VotesClient({
+          governorAddress,
+          timelockAddress,
+          votesAddress,
+          network,
+          ...(rpcUrl && { rpcUrl }),
+        });
+
+        const [summaryResp, delegatesResp, supply] = await Promise.all([
+          fetch(`${indexerUrl}/analytics/summary`, { cache: "no-store" }),
+          fetch(`${indexerUrl}/delegates?top=10`, { cache: "no-store" }),
+          votesClient.getTotalSupply(),
+        ]);
+
+        if (!summaryResp.ok) throw new Error(`Indexer error: ${summaryResp.status}`);
+        if (!delegatesResp.ok) throw new Error(`Indexer error: ${delegatesResp.status}`);
+
+        const [summaryJson, delegatesJson] = await Promise.all([
+          summaryResp.json(),
+          delegatesResp.json(),
+        ]);
+
+        // Fetch proposals (paginate all-time; stop early for 7d/30d)
+        const cutoffMs =
+          timeRange === "7d"
+            ? Date.now() - 7 * 24 * 60 * 60 * 1000
+            : timeRange === "30d"
+              ? Date.now() - 30 * 24 * 60 * 60 * 1000
+              : 0;
+
+        const collected: any[] = [];
+        let before: number | undefined = undefined;
+        let safetyPages = 0;
+        while (safetyPages < 50) {
+          safetyPages += 1;
+          const url = new URL(`${indexerUrl}/proposals`);
+          url.searchParams.set("limit", "100");
+          if (before) url.searchParams.set("before", String(before));
+          const resp = await fetch(url.toString(), { cache: "no-store" });
+          if (!resp.ok) break;
+          const json = await resp.json();
+          const batch = Array.isArray(json.proposals) ? json.proposals : [];
+          if (batch.length === 0) break;
+
+          for (const p of batch) {
+            if (cutoffMs > 0) {
+              const createdAt = p.created_at ? Date.parse(p.created_at) : 0;
+              if (createdAt && createdAt < cutoffMs) {
+                // We've paged back beyond the range; stop.
+                safetyPages = 50;
+                break;
+              }
+            }
+            collected.push(p);
+          }
+
+          before = json.nextCursor;
+          if (!json.hasMore || !before) break;
+        }
+
+        if (cancelled) return;
+
+        setSummary(summaryJson);
+        setTopDelegates(
+          (delegatesJson.delegates ?? []).map((d: any) => ({
+            name: String(d.address ?? "").slice(0, 8) + "…",
+            votes: Number(d.delegator_count ?? 0),
+          })),
+        );
+        setProposals(collected);
+        setTotalSupply(supply);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to load analytics");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    fetchAll();
+    return () => {
+      cancelled = true;
+    };
+  }, [timeRange]);
+
+  const participationData = useMemo(() => {
+    const supply = totalSupply > 0n ? Number(totalSupply) : 0;
+    return proposals
+      .slice()
+      .reverse()
+      .map((p) => {
+        const totalVotes =
+          Number(p.votes_for ?? 0) +
+          Number(p.votes_against ?? 0) +
+          Number(p.votes_abstain ?? 0);
+        const participation = supply > 0 ? (totalVotes / supply) * 100 : 0;
+        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : `#${p.id}`;
+        return { date, participation: Number(participation.toFixed(2)) };
+      });
+  }, [proposals, totalSupply]);
+
+  const outcomeData = useMemo(() => {
+    const executed = summary?.outcomes.executed ?? 0;
+    const cancelled = summary?.outcomes.cancelled ?? 0;
+    const queued = summary?.outcomes.queued ?? 0;
+    const other = Math.max(0, (summary?.totalProposals ?? 0) - executed - cancelled - queued);
+    return [
+      { name: "Executed", value: executed },
+      { name: "Cancelled", value: cancelled },
+      { name: "Queued", value: queued },
+      { name: "Other", value: other },
+    ];
+  }, [summary]);
+
+  const avgParticipationPct = useMemo(() => {
+    if (!summary) return 0;
+    if (totalSupply <= 0n) return 0;
+    return Number(((Number(summary.averageVotesPerProposal) / Number(totalSupply)) * 100).toFixed(2));
+  }, [summary, totalSupply]);
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-8">
@@ -90,22 +222,84 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
+      <div className="flex items-center gap-2 mb-6">
+        <button
+          onClick={() => setTimeRange("7d")}
+          className={`px-3 py-1.5 text-sm rounded-lg border ${
+            timeRange === "7d"
+              ? "bg-indigo-600 text-white border-indigo-600"
+              : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700"
+          }`}
+        >
+          7d
+        </button>
+        <button
+          onClick={() => setTimeRange("30d")}
+          className={`px-3 py-1.5 text-sm rounded-lg border ${
+            timeRange === "30d"
+              ? "bg-indigo-600 text-white border-indigo-600"
+              : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700"
+          }`}
+        >
+          30d
+        </button>
+        <button
+          onClick={() => setTimeRange("all")}
+          className={`px-3 py-1.5 text-sm rounded-lg border ${
+            timeRange === "all"
+              ? "bg-indigo-600 text-white border-indigo-600"
+              : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700"
+          }`}
+        >
+          all-time
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
+          <p className="text-red-800 dark:text-red-200 font-medium">Failed to load analytics</p>
+          <p className="text-red-700 dark:text-red-300 text-sm mt-1">{error}</p>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
           <p className="text-sm text-gray-500 dark:text-gray-400">Total proposals</p>
-          <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats.total}</p>
+          {loading ? (
+            <Skeleton className="h-7 w-16 mt-2" />
+          ) : (
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{summary?.totalProposals ?? 0}</p>
+          )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
           <p className="text-sm text-gray-500 dark:text-gray-400">Avg participation</p>
-          <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats.avgParticipation}%</p>
+          {loading ? (
+            <Skeleton className="h-7 w-24 mt-2" />
+          ) : (
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{avgParticipationPct}%</p>
+          )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Delegation rate</p>
-          <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats.delegationRate}%</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Unique voters</p>
+          {loading ? (
+            <Skeleton className="h-7 w-20 mt-2" />
+          ) : (
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{summary?.totalUniqueVoters ?? 0}</p>
+          )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Passed proposals</p>
-          <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats.passed}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Most active proposer</p>
+          {loading ? (
+            <Skeleton className="h-7 w-32 mt-2" />
+          ) : (
+            <p className="text-sm font-semibold text-gray-900 dark:text-white mt-2">
+              {(summary?.mostActiveProposers?.[0]?.proposer ?? "—").slice(0, 10)}…
+              <span className="text-gray-500 dark:text-gray-400 font-normal">
+                {" "}
+                ({summary?.mostActiveProposers?.[0]?.count ?? 0})
+              </span>
+            </p>
+          )}
         </div>
       </div>
 
@@ -116,12 +310,12 @@ export default function AnalyticsPage() {
             <ResponsiveContainer width="100%" height={240}>
               <LineChart data={participationData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
                 <XAxis dataKey="date" tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} />
-                <YAxis tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} />
+                <YAxis tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} unit="%" />
                 <Tooltip 
                   contentStyle={{ backgroundColor: chartTheme.tooltipBg, borderColor: chartTheme.tooltipBorder, color: isDark ? '#fff' : '#000' }}
                   itemStyle={{ color: isDark ? '#fff' : '#000' }}
                 />
-                <Line type="monotone" dataKey="votes" stroke="#6366f1" strokeWidth={2} />
+                <Line type="monotone" dataKey="participation" stroke="#6366f1" strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -148,7 +342,7 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="lg:col-span-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">Top Delegates (by votes)</h3>
+          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">Top Delegates (by delegators)</h3>
           <div style={{ width: "100%", height: 220 }}>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={topDelegates} layout="vertical" margin={{ top: 5, right: 30, left: 50, bottom: 5 }}>

@@ -100,6 +100,59 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     }
   });
 
+  // GET /analytics/summary
+  app.get(
+    "/analytics/summary",
+    async (_req: Request, res: Response): Promise<void> => {
+      const key = "analytics:summary";
+      try {
+        const data = await cached(key, TTL.proposals, async () => {
+          const [
+            totalProposalsRes,
+            uniqueVotersRes,
+            avgVotesRes,
+            mostActiveProposersRes,
+            outcomesRes,
+            stateRes,
+          ] = await Promise.all([
+            pool.query("SELECT COUNT(*)::int AS total FROM proposals"),
+            pool.query("SELECT COUNT(DISTINCT voter)::int AS total FROM votes"),
+            pool.query(
+              "SELECT COALESCE(AVG(votes_for + votes_against + votes_abstain), 0)::float AS avg FROM proposals",
+            ),
+            pool.query(
+              `SELECT proposer, COUNT(*)::int AS count
+               FROM proposals
+               GROUP BY proposer
+               ORDER BY count DESC
+               LIMIT 5`,
+            ),
+            pool.query(
+              `SELECT
+                SUM(CASE WHEN executed THEN 1 ELSE 0 END)::int AS executed,
+                SUM(CASE WHEN cancelled THEN 1 ELSE 0 END)::int AS cancelled,
+                SUM(CASE WHEN queued THEN 1 ELSE 0 END)::int AS queued
+               FROM proposals`,
+            ),
+            pool.query("SELECT last_ledger::int AS last_ledger FROM indexer_state WHERE id = 1"),
+          ]);
+
+          return {
+            totalProposals: totalProposalsRes.rows[0]?.total ?? 0,
+            totalUniqueVoters: uniqueVotersRes.rows[0]?.total ?? 0,
+            averageVotesPerProposal: avgVotesRes.rows[0]?.avg ?? 0,
+            mostActiveProposers: mostActiveProposersRes.rows ?? [],
+            outcomes: outcomesRes.rows[0] ?? { executed: 0, cancelled: 0, queued: 0 },
+            lastIndexedLedger: stateRes.rows[0]?.last_ledger ?? 0,
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   // GET /proposals?offset=0&limit=20 or ?before=47&limit=20 or ?after=10&limit=20
   app.get("/proposals", async (req: Request, res: Response): Promise<void> => {
     const limit = Math.min(Number(req.query.limit ?? 20), 100);

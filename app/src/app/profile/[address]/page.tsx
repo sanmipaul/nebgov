@@ -23,8 +23,9 @@ import { isValidStellarAddress, formatVotingPower } from "../../../lib/utils";
 
 interface VotingRecord {
   proposalId: bigint;
-  support: VoteSupport | null;
-  voted: boolean;
+  support: VoteSupport;
+  weight: bigint;
+  ledger: number;
 }
 
 interface DelegationInfo {
@@ -39,8 +40,13 @@ interface ProfileData {
   percentOfSupply: number;
   delegationInfo: DelegationInfo;
   votingHistory: VotingRecord[];
+  proposalsCreated: number;
   totalProposals: number;
-  totalVoted: number;
+  votesCast: number;
+  createdProposals: Array<{
+    id: bigint;
+    state: ProposalState;
+  }>;
 }
 
 function Skeleton({ className }: { className?: string }) {
@@ -55,7 +61,9 @@ function VoterProfilePageContent() {
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [history, setHistory] = useState<{ ledger: number; votingPower: number }[]>([]);
+  const [history, setHistory] = useState<
+    { ledger: number; votingPower: number }[]
+  >([]);
   const [error, setError] = useState<string | null>(null);
   const [federatedName, setFederatedName] = useState<string | null>(null);
 
@@ -83,6 +91,7 @@ function VoterProfilePageContent() {
         const network = (process.env.NEXT_PUBLIC_NETWORK ||
           "testnet") as Network;
         const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+        const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
 
         if (!governorAddress || !timelockAddress || !votesAddress) {
           throw new Error(
@@ -106,7 +115,6 @@ function VoterProfilePageContent() {
           ...(rpcUrl && { rpcUrl }),
         });
 
-        // Fetch voting power and total supply in parallel
         const [votingPower, totalSupply] = await Promise.all([
           votesClient.getVotes(address),
           votesClient.getTotalSupply(),
@@ -117,37 +125,44 @@ function VoterProfilePageContent() {
             ? Number((votingPower * 10000n) / totalSupply) / 100
             : 0;
 
-        // Fetch delegation info
-        const delegatedTo = await votesClient.getDelegatee(address);
+        const [delegatedTo, delegators, totalProposals] = await Promise.all([
+          votesClient.getDelegatee(address),
+          votesClient.getDelegators(address),
+          governorClient.proposalCount().then((v) => Number(v)),
+        ]);
 
-        // Fetch total proposal count
-        const totalProposals = Number(await governorClient.proposalCount());
-
-        // Fetch voting history - check if addressed voted on each proposal
-        const votingHistory: VotingRecord[] = [];
-        let totalVoted = 0;
-
-        // Fetch all proposals and check voting status
-        for (let i = 1; i <= totalProposals; i++) {
-          const proposalId = BigInt(i);
+        let votesCast = 0;
+        let proposalsCreated = 0;
+        if (indexerUrl) {
           try {
-            const hasVoted = await governorClient.hasVoted(proposalId, address);
-            if (hasVoted) {
-              totalVoted++;
-              votingHistory.push({
-                proposalId,
-                support: null, // TODO: Extract support type from contract events if needed
-                voted: true,
-              });
+            const resp = await fetch(`${indexerUrl}/profile/${address}`, {
+              cache: "no-store",
+            });
+            if (resp.ok) {
+              const json = await resp.json();
+              votesCast = Number(json.votescast ?? 0);
+              proposalsCreated = Number(json.proposalsCreated ?? 0);
             }
           } catch {
-            // Skip proposals that can't be queried
+            // ignore indexer failure; fall back to on-chain derived data
           }
         }
 
-        // For now, we'll estimate delegators as an empty array
-        // In production, this would require an indexer or event listener
-        const delegators: string[] = [];
+        const [votingHistory, createdProposalsHydrated] = await Promise.all([
+          governorClient.getVotesCastByAddress(address, {
+            fromLedger: Math.max(1, (await governorClient.getLatestLedger()) - 17_280 * 30),
+            limit: 50,
+          }),
+          governorClient.getProposalsForAddress(address, {
+            fromLedger: 1,
+            limit: 25,
+          }),
+        ]);
+
+        const createdProposals = createdProposalsHydrated.map((p) => ({
+          id: p.id,
+          state: p.state,
+        }));
 
         setData({
           address,
@@ -156,11 +171,13 @@ function VoterProfilePageContent() {
           delegationInfo: {
             delegatedTo,
             totalDelegators: delegators.length,
-            delegators,
+            delegators: delegators.map((d) => d.delegator),
           },
           votingHistory,
+          proposalsCreated,
+          createdProposals,
           totalProposals,
-          totalVoted,
+          votesCast,
         });
 
         const latestLedger = await governorClient.getLatestLedger();
@@ -246,7 +263,7 @@ function VoterProfilePageContent() {
 
   const participationRate =
     data.totalProposals > 0
-      ? ((data.totalVoted / data.totalProposals) * 100).toFixed(1)
+      ? ((data.votesCast / data.totalProposals) * 100).toFixed(1)
       : "0";
 
   return (
@@ -308,7 +325,7 @@ function VoterProfilePageContent() {
             {participationRate}%
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            {data.totalVoted} of {data.totalProposals} proposals voted
+            {data.votesCast} of {data.totalProposals} proposals voted
           </p>
         </div>
       </div>
@@ -433,16 +450,14 @@ function VoterProfilePageContent() {
                   <p className="text-sm font-medium text-gray-900">
                     Proposal #{record.proposalId.toString()}
                   </p>
-                  {record.voted && (
-                    <p className="text-xs text-gray-500 mt-1">Voted</p>
-                  )}
+                  <p className="text-xs text-gray-500 mt-1">
+                    {record.support} · {formatVotingPower(record.weight)} · ledger #{record.ledger}
+                  </p>
                 </div>
                 <div className="text-right">
-                  {record.voted && (
-                    <span className="inline-block bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">
-                      ✓ Voted
-                    </span>
-                  )}
+                  <span className="inline-block bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                    ✓ Voted
+                  </span>
                 </div>
               </Link>
             ))}
@@ -450,6 +465,40 @@ function VoterProfilePageContent() {
         ) : (
           <div className="px-6 py-12 text-center">
             <p className="text-gray-500 text-sm">No voting history found</p>
+          </div>
+        )}
+      </div>
+
+      {/* Proposal History */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mt-8">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <p className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+            Proposal History
+          </p>
+        </div>
+        {data.createdProposals.length > 0 ? (
+          <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+            {data.createdProposals.slice(0, 25).map((p) => (
+              <Link
+                key={p.id.toString()}
+                href={`/proposal/${p.id}`}
+                className="px-6 py-4 hover:bg-gray-50 transition-colors flex items-center justify-between"
+              >
+                <div>
+                  <p className="text-sm font-medium text-gray-900">
+                    Proposal #{p.id.toString()}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{p.state}</p>
+                </div>
+                <span className="text-xs text-gray-600">
+                  View →
+                </span>
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <div className="px-6 py-12 text-center">
+            <p className="text-gray-500 text-sm">No proposals created</p>
           </div>
         )}
       </div>
