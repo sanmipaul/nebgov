@@ -120,6 +120,49 @@ describe("VotesClient", () => {
     });
   });
 
+  describe("transferAndDelegate()", () => {
+    const toAddr = "GBTESTRECIPIENTADDRESSEXAMPLEFORUNITTESTSTESTING";
+    const delegateeAddr = "GBTESTDELEGATEEADDRESSEXAMPLEFORUNITTESTSTESTING";
+    const amount = 250n;
+
+    beforeEach(() => {
+      const mockTx = { sign: jest.fn() };
+      mockPrepareTransaction.mockResolvedValue(mockTx);
+      mockSendTransaction.mockResolvedValue({
+        status: "PENDING",
+        hash: "transferAndDelegate123",
+      });
+    });
+
+    it("submits atomic transfer+delegate transaction", async () => {
+      await client.transferAndDelegate(mockKeypair, toAddr, amount, delegateeAddr);
+
+      expect(mockPrepareTransaction).toHaveBeenCalled();
+      expect(mockSendTransaction).toHaveBeenCalled();
+      expect(mockNativeToScVal).toHaveBeenCalledWith(mockKeypair.publicKey(), {
+        type: "address",
+      });
+      expect(mockNativeToScVal).toHaveBeenCalledWith(toAddr, {
+        type: "address",
+      });
+      expect(mockNativeToScVal).toHaveBeenCalledWith(amount, { type: "i128" });
+      expect(mockNativeToScVal).toHaveBeenCalledWith(delegateeAddr, {
+        type: "address",
+      });
+    });
+
+    it("throws VotesError on failed submission", async () => {
+      mockSendTransaction.mockResolvedValue({
+        status: "ERROR",
+        error: "insufficient balance",
+      });
+
+      await expect(
+        client.transferAndDelegate(mockKeypair, toAddr, amount, delegateeAddr),
+      ).rejects.toThrow(VotesError);
+    });
+  });
+
   describe("getVotes()", () => {
     const accountAddr = "GBTESTACCOUNTADDRESSEXAMPLEFORUNITTESTSTESTING";
 

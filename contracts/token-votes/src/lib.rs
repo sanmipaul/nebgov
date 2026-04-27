@@ -67,13 +67,37 @@ impl TokenVotesContract {
     /// without altering how much supply is actively delegated.
     pub fn delegate(env: Env, delegator: Address, delegatee: Address) {
         delegator.require_auth();
+        Self::apply_delegation(&env, delegator, delegatee);
+    }
+
+    /// Transfer underlying votes token and delegate in one atomic transaction.
+    /// Only `from` must authorize this operation.
+    pub fn transfer_and_delegate(
+        env: Env,
+        from: Address,
+        to: Address,
+        amount: i128,
+        delegatee: Address,
+    ) {
+        from.require_auth();
+        assert!(amount > 0, "amount must be positive");
 
         let token_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::Token)
             .expect("token not set");
-        let balance = token::TokenClient::new(&env, &token_addr).balance(&delegator);
+        token::TokenClient::new(&env, &token_addr).transfer(&from, &to, &amount);
+        Self::apply_delegation(&env, to, delegatee);
+    }
+
+    fn apply_delegation(env: &Env, delegator: Address, delegatee: Address) {
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .expect("token not set");
+        let balance = token::TokenClient::new(env, &token_addr).balance(&delegator);
 
         // Determine whether this is a first-time delegation or a re-delegation.
         let previous_delegate: Option<Address> = env
@@ -111,25 +135,25 @@ impl TokenVotesContract {
 
         if let Some(old_delegatee) = previous_delegate.clone() {
             if old_delegatee != delegatee {
-                Self::update_account_votes(&env, old_delegatee.clone(), -record.balance, -old_weighted_sum);
-                Self::update_account_votes(&env, delegatee.clone(), new_record.balance, new_weighted_sum);
+                Self::update_account_votes(env, old_delegatee.clone(), -record.balance, -old_weighted_sum);
+                Self::update_account_votes(env, delegatee.clone(), new_record.balance, new_weighted_sum);
             } else {
                 let delta = new_record.balance - record.balance;
                 let delta_ws = new_weighted_sum - old_weighted_sum;
-                Self::update_account_votes(&env, delegatee.clone(), delta, delta_ws);
+                Self::update_account_votes(env, delegatee.clone(), delta, delta_ws);
             }
             // Update total supply by the delta
             let delta = new_record.balance - record.balance;
             let delta_ws = new_weighted_sum - old_weighted_sum;
             if delta != 0 || delta_ws != 0 {
-                Self::update_total_supply_checkpoint(&env, delta, delta_ws);
+                Self::update_total_supply_checkpoint(env, delta, delta_ws);
             }
         } else {
             // First time delegation adds to total supply
             if balance > 0 {
-                Self::update_total_supply_checkpoint(&env, balance, new_weighted_sum);
+                Self::update_total_supply_checkpoint(env, balance, new_weighted_sum);
             }
-            Self::update_account_votes(&env, delegatee.clone(), balance, new_weighted_sum);
+            Self::update_account_votes(env, delegatee.clone(), balance, new_weighted_sum);
         }
 
         env.storage()
@@ -533,79 +557,7 @@ impl TokenVotesContract {
         // This correctly handles Ed25519 keys, multisig, and smart-wallet accounts
         // without needing to extract the raw public key from an Address.
         owner.require_auth();
-
-        // Get token balance
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Token)
-            .expect("token not set");
-        let balance = token::TokenClient::new(&env, &token_addr).balance(&owner);
-
-        // Determine whether this is a first-time delegation or a re-delegation.
-        let previous_delegate: Option<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Delegate(owner.clone()));
-
-        let record: DelegatorRecord = env
-            .storage()
-            .persistent()
-            .get(&DataKey::DelegatorRecord(owner.clone()))
-            .unwrap_or_default();
-
-        let current_ledger = env.ledger().sequence();
-        let mut new_record = record.clone();
-        new_record.balance = balance;
-
-        if balance > record.balance {
-            let added = balance - record.balance;
-            let total_weighted_start =
-                (record.balance as i128 * record.start_ledger as i128) + (added as i128 * current_ledger as i128);
-            new_record.start_ledger = if balance > 0 {
-                (total_weighted_start / balance) as u32
-            } else {
-                current_ledger
-            };
-        } else if record.balance == 0 && balance > 0 {
-            new_record.start_ledger = current_ledger;
-        }
-
-        let old_weighted_sum = record.balance as i128 * record.start_ledger as i128;
-        let new_weighted_sum = new_record.balance as i128 * new_record.start_ledger as i128;
-
-        if let Some(old_delegatee) = previous_delegate.clone() {
-            if old_delegatee != delegatee {
-                Self::update_account_votes(&env, old_delegatee.clone(), -record.balance, -old_weighted_sum);
-                Self::update_account_votes(&env, delegatee.clone(), new_record.balance, new_weighted_sum);
-            } else {
-                let delta = new_record.balance - record.balance;
-                let delta_ws = new_weighted_sum - old_weighted_sum;
-                Self::update_account_votes(&env, delegatee.clone(), delta, delta_ws);
-            }
-            let delta = new_record.balance - record.balance;
-            let delta_ws = new_weighted_sum - old_weighted_sum;
-            if delta != 0 || delta_ws != 0 {
-                Self::update_total_supply_checkpoint(&env, delta, delta_ws);
-            }
-        } else {
-            if balance > 0 {
-                Self::update_total_supply_checkpoint(&env, balance, new_weighted_sum);
-            }
-            Self::update_account_votes(&env, delegatee.clone(), balance, new_weighted_sum);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Delegate(owner.clone()), &delegatee);
-        env.storage()
-            .persistent()
-            .set(&DataKey::DelegatorRecord(owner.clone()), &new_record);
-
-        env.events().publish(
-            (symbol_short!("del_chsh"), owner.clone()),
-            (previous_delegate, delegatee),
-        );
+        Self::apply_delegation(&env, owner, delegatee);
     }
 
     /// Set the checkpoint retention period (admin only).
@@ -848,7 +800,7 @@ mod tests {
         let token_addr = sac.address();
         let contract_id = env.register(TokenVotesContract, ());
         let client = TokenVotesContractClient::new(env, &contract_id);
-        client.initialize(admin, \u0026token_addr);
+        client.initialize(admin, &token_addr);
         (contract_id, token_addr)
     }
 
@@ -857,21 +809,21 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
         // Mint 1000 tokens to the delegator.
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator, \u00261000i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &1000i128);
 
         // First delegation \u2014 total supply checkpoint should record the balance.
-        client.delegate(\u0026delegator, \u0026delegatee);
+        client.delegate(&delegator, &delegatee);
 
-        let total = client.get_past_total_supply(\u0026env.ledger().sequence());
+        let total = client.get_past_total_supply(&env.ledger().sequence());
         assert_eq!(total, 1000);
     }
 
@@ -880,20 +832,20 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee1 = Address::generate(\u0026env);
-        let delegatee2 = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee1 = Address::generate(&env);
+        let delegatee2 = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator, \u0026500i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &500i128);
 
         // First delegation: activates voting power.
-        client.delegate(\u0026delegator, \u0026delegatee1);
-        let after_first = client.get_past_total_supply(\u0026env.ledger().sequence());
+        client.delegate(&delegator, &delegatee1);
+        let after_first = client.get_past_total_supply(&env.ledger().sequence());
         assert_eq!(after_first, 500);
 
         // Advance ledger so the re-delegation lands on a different slot.
@@ -902,8 +854,8 @@ mod tests {
         });
 
         // Re-delegation: power moves between delegatees; total must not change.
-        client.delegate(\u0026delegator, \u0026delegatee2);
-        let after_redelegate = client.get_past_total_supply(\u0026env.ledger().sequence());
+        client.delegate(&delegator, &delegatee2);
+        let after_redelegate = client.get_past_total_supply(&env.ledger().sequence());
         assert_eq!(after_redelegate, 500);
     }
 
@@ -912,29 +864,29 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator1 = Address::generate(\u0026env);
-        let delegator2 = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator1 = Address::generate(&env);
+        let delegator2 = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator1, \u0026300i128);
-        sac_client.mint(\u0026delegator2, \u0026700i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator1, &300i128);
+        sac_client.mint(&delegator2, &700i128);
 
         // Each delegator activates on a different ledger to produce distinct checkpoints.
-        client.delegate(\u0026delegator1, \u0026delegatee);
-        let after_first = client.get_past_total_supply(\u0026env.ledger().sequence());
+        client.delegate(&delegator1, &delegatee);
+        let after_first = client.get_past_total_supply(&env.ledger().sequence());
         assert_eq!(after_first, 300);
 
         env.ledger().with_mut(|l| {
             l.sequence_number += 1;
         });
 
-        client.delegate(\u0026delegator2, \u0026delegatee);
-        let after_second = client.get_past_total_supply(\u0026env.ledger().sequence());
+        client.delegate(&delegator2, &delegatee);
+        let after_second = client.get_past_total_supply(&env.ledger().sequence());
         assert_eq!(after_second, 1000); // 300 + 700
     }
 
@@ -943,33 +895,33 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator1 = Address::generate(\u0026env);
-        let delegator2 = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator1 = Address::generate(&env);
+        let delegator2 = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator1, \u0026400i128);
-        sac_client.mint(\u0026delegator2, \u0026600i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator1, &400i128);
+        sac_client.mint(&delegator2, &600i128);
 
         // Both delegations happen on the same ledger sequence \u2014 they should be
         // merged into a single checkpoint rather than producing two entries.
-        client.delegate(\u0026delegator1, \u0026delegatee);
-        client.delegate(\u0026delegator2, \u0026delegatee);
+        client.delegate(&delegator1, &delegatee);
+        client.delegate(&delegator2, &delegatee);
 
         // The combined total must reflect both balances.
-        let total = client.get_past_total_supply(\u0026env.ledger().sequence());
+        let total = client.get_past_total_supply(&env.ledger().sequence());
         assert_eq!(total, 1000); // 400 + 600
 
         // Only one checkpoint should exist because same-ledger entries are merged.
-        let checkpoint_count = env.as_contract(\u0026contract_id, || {
-            let checkpoints: soroban_sdk::Vec\u003cCheckpoint\u003e = env
+        let checkpoint_count = env.as_contract(&contract_id, || {
+            let checkpoints: soroban_sdk::Vec<Checkpoint> = env
                 .storage()
                 .persistent()
-                .get(\u0026DataKey::TotalCheckpoints)
+                .get(&DataKey::TotalCheckpoints)
                 .unwrap();
             checkpoints.len()
         });
@@ -981,50 +933,50 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator1 = Address::generate(\u0026env);
-        let delegator2 = Address::generate(\u0026env);
-        let delegator3 = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator1 = Address::generate(&env);
+        let delegator2 = Address::generate(&env);
+        let delegator3 = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator1, \u0026100i128);
-        sac_client.mint(\u0026delegator2, \u0026200i128);
-        sac_client.mint(\u0026delegator3, \u0026300i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator1, &100i128);
+        sac_client.mint(&delegator2, &200i128);
+        sac_client.mint(&delegator3, &300i128);
 
         // ledger 1: total = 100
         env.ledger().with_mut(|l| {
             l.sequence_number = 1;
         });
-        client.delegate(\u0026delegator1, \u0026delegatee);
+        client.delegate(&delegator1, &delegatee);
 
         // ledger 5: total = 300
         env.ledger().with_mut(|l| {
             l.sequence_number = 5;
         });
-        client.delegate(\u0026delegator2, \u0026delegatee);
+        client.delegate(&delegator2, &delegatee);
 
         // ledger 10: total = 600
         env.ledger().with_mut(|l| {
             l.sequence_number = 10;
         });
-        client.delegate(\u0026delegator3, \u0026delegatee);
+        client.delegate(&delegator3, &delegatee);
 
         // Exact ledger matches.
-        assert_eq!(client.get_past_total_supply(\u00261), 100);
-        assert_eq!(client.get_past_total_supply(\u00265), 300);
-        assert_eq!(client.get_past_total_supply(\u002610), 600);
+        assert_eq!(client.get_past_total_supply(&1), 100);
+        assert_eq!(client.get_past_total_supply(&5), 300);
+        assert_eq!(client.get_past_total_supply(&10), 600);
 
         // Between checkpoints: return the most recent value before the query.
-        assert_eq!(client.get_past_total_supply(\u00263), 100); // between ledger 1 and 5
-        assert_eq!(client.get_past_total_supply(\u00267), 300); // between ledger 5 and 10
-        assert_eq!(client.get_past_total_supply(\u002699), 600); // after last checkpoint
+        assert_eq!(client.get_past_total_supply(&3), 100); // between ledger 1 and 5
+        assert_eq!(client.get_past_total_supply(&7), 300); // between ledger 5 and 10
+        assert_eq!(client.get_past_total_supply(&99), 600); // after last checkpoint
 
         // Before any checkpoint: return 0.
-        assert_eq!(client.get_past_total_supply(\u00260), 0);
+        assert_eq!(client.get_past_total_supply(&0), 0);
     }
 
     #[test]
@@ -1032,30 +984,30 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee1 = Address::generate(\u0026env);
-        let delegatee2 = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee1 = Address::generate(&env);
+        let delegatee2 = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator, \u00261000i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &1000i128);
 
         // First delegation
-        client.delegate(\u0026delegator, \u0026delegatee1);
-        assert_eq!(client.get_votes(\u0026delegatee1), 1000);
-        assert_eq!(client.get_votes(\u0026delegatee2), 0);
+        client.delegate(&delegator, &delegatee1);
+        assert_eq!(client.get_votes(&delegatee1), 1000);
+        assert_eq!(client.get_votes(&delegatee2), 0);
 
         env.ledger().with_mut(|l| {
             l.sequence_number += 1;
         });
 
         // Redelegation
-        client.delegate(\u0026delegator, \u0026delegatee2);
-        assert_eq!(client.get_votes(\u0026delegatee1), 0);
-        assert_eq!(client.get_votes(\u0026delegatee2), 1000);
+        client.delegate(&delegator, &delegatee2);
+        assert_eq!(client.get_votes(&delegatee1), 0);
+        assert_eq!(client.get_votes(&delegatee2), 1000);
     }
 
     #[test]
@@ -1063,27 +1015,27 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator, \u0026500i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &500i128);
 
-        client.delegate(\u0026delegator, \u0026delegatee);
-        assert_eq!(client.get_votes(\u0026delegatee), 500);
-        assert_eq!(client.delegates(\u0026delegator), Some(delegatee.clone()));
-        assert_eq!(client.get_past_total_supply(\u0026env.ledger().sequence()), 500);
+        client.delegate(&delegator, &delegatee);
+        assert_eq!(client.get_votes(&delegatee), 500);
+        assert_eq!(client.delegates(&delegator), Some(delegatee.clone()));
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 500);
 
         env.ledger().with_mut(|l| l.sequence_number += 1);
-        client.revoke_delegation(\u0026delegator);
+        client.revoke_delegation(&delegator);
 
-        assert_eq!(client.get_votes(\u0026delegatee), 0);
-        assert_eq!(client.delegates(\u0026delegator), None);
-        assert_eq!(client.get_past_total_supply(\u0026env.ledger().sequence()), 0);
+        assert_eq!(client.get_votes(&delegatee), 0);
+        assert_eq!(client.delegates(&delegator), None);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 0);
     }
 
     #[test]
@@ -1091,74 +1043,74 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator, \u00261000i128);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &1000i128);
 
-        client.delegate(\u0026delegator, \u0026delegatee);
+        client.delegate(&delegator, &delegatee);
 
         let events = env.events().all();
         // Index 0: Mint
         // Index 1: Update total supply (v_active event might be used if I changed it, wait)
-        // Actually, my current update_account_votes emits \"v_active\"
-        // and delegate emits \"del_chsh\"
+        // Actually, my current update_account_votes emits "v_active"
+        // and delegate emits "del_chsh"
 
         let sub_events = events.iter().filter(|e| e.0 == contract_id);
-        assert!(sub_events.count() \u2265 2);
+        assert!(sub_events.count() >= 2);
     }
 
     #[test]
     fn test_account_binary_search_returns_correct_historical_value() {
         let env = Env::default();
         env.mock_all_auths();
-        let admin = Address::generate(\u0026env);
-        let user1 = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let user1 = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026user1, \u00261000i128);
+        sac_client.mint(&user1, &1000i128);
 
         // ledger 1: user1 delegations = 1000
         env.ledger().with_mut(|l| {
             l.sequence_number = 1;
         });
-        client.delegate(\u0026user1, \u0026user1);
-        assert_eq!(client.get_past_votes(\u0026user1, \u00261), 1000);
+        client.delegate(&user1, &user1);
+        assert_eq!(client.get_past_votes(&user1, &1), 1000);
 
         // ledger 10: user1 delegations = 1500
         env.ledger().with_mut(|l| {
             l.sequence_number = 10;
         });
-        sac_client.mint(\u0026user1, \u0026500i128);
+        sac_client.mint(&user1, &500i128);
         // We must call checkpoint or delegate to update the voting power log.
         // In a real scenario, the token contract would call this.
-        client.checkpoint(\u0026user1, \u00261500i128);
-        assert_eq!(client.get_votes(\u0026user1), 1500);
-        assert_eq!(client.get_past_votes(\u0026user1, \u002610), 1500);
+        client.checkpoint(&user1, &1500i128);
+        assert_eq!(client.get_votes(&user1), 1500);
+        assert_eq!(client.get_past_votes(&user1, &10), 1500);
 
         // ledger 20: user1 delegations = 1300
         env.ledger().with_mut(|l| {
             l.sequence_number = 20;
         });
-        client.checkpoint(\u0026user1, \u00261300i128);
-        assert_eq!(client.get_votes(\u0026user1), 1300);
-        assert_eq!(client.get_past_votes(\u0026user1, \u002620), 1300);
+        client.checkpoint(&user1, &1300i128);
+        assert_eq!(client.get_votes(&user1), 1300);
+        assert_eq!(client.get_past_votes(&user1, &20), 1300);
 
         // Verify history
-        assert_eq!(client.get_past_votes(\u0026user1, \u00260), 0);
-        assert_eq!(client.get_past_votes(\u0026user1, \u00265), 1000);
-        assert_eq!(client.get_past_votes(\u0026user1, \u002610), 1500);
-        assert_eq!(client.get_past_votes(\u0026user1, \u002615), 1500);
-        assert_eq!(client.get_past_votes(\u0026user1, \u002620), 1300);
-        assert_eq!(client.get_past_votes(\u0026user1, \u0026100), 1300);
+        assert_eq!(client.get_past_votes(&user1, &0), 0);
+        assert_eq!(client.get_past_votes(&user1, &5), 1000);
+        assert_eq!(client.get_past_votes(&user1, &10), 1500);
+        assert_eq!(client.get_past_votes(&user1, &15), 1500);
+        assert_eq!(client.get_past_votes(&user1, &20), 1300);
+        assert_eq!(client.get_past_votes(&user1, &100), 1300);
     }
 
     // \u2014\u2014 Edge-case tests (issue #192) \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014
@@ -1171,18 +1123,18 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let zero_holder = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let zero_holder = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, _token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, _token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
         // zero_holder has no tokens \u2014 total supply must stay 0 after delegation.
-        client.delegate(\u0026zero_holder, \u0026delegatee);
+        client.delegate(&zero_holder, &delegatee);
 
-        assert_eq!(client.get_votes(\u0026delegatee), 0);
-        assert_eq!(client.get_past_total_supply(\u0026env.ledger().sequence()), 0);
+        assert_eq!(client.get_votes(&delegatee), 0);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 0);
     }
 
     /// Self-delegation: delegating to your own address is a valid operation.
@@ -1192,18 +1144,83 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let user = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026user, \u00262000i128);
-        client.delegate(\u0026user, \u0026user); // delegate to self
+        sac_client.mint(&user, &2000i128);
+        client.delegate(&user, &user); // delegate to self
 
-        assert_eq!(client.get_votes(\u0026user), 2000);
-        assert_eq!(client.get_past_total_supply(\u0026env.ledger().sequence()), 2000);
+        assert_eq!(client.get_votes(&user), 2000);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 2000);
+    }
+
+    #[test]
+    fn test_transfer_and_delegate_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&from, &500i128);
+        client.transfer_and_delegate(&from, &to, &200i128, &delegatee);
+
+        let token_client = token::TokenClient::new(&env, &token_addr);
+        assert_eq!(token_client.balance(&from), 300);
+        assert_eq!(token_client.balance(&to), 200);
+        assert_eq!(client.delegates(&to), Some(delegatee.clone()));
+        assert_eq!(client.get_votes(&delegatee), 200);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 200);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_transfer_and_delegate_insufficient_balance_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&from, &50i128);
+        client.transfer_and_delegate(&from, &to, &200i128, &delegatee);
+    }
+
+    #[test]
+    fn test_transfer_and_delegate_self_delegation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let from = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&from, &1000i128);
+        client.transfer_and_delegate(&from, &to, &400i128, &to);
+
+        assert_eq!(client.delegates(&to), Some(to.clone()));
+        assert_eq!(client.get_votes(&to), 400);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 400);
     }
 
     /// Re-delegating to the *same* delegatee is a no-op: voting power must not
@@ -1213,26 +1230,26 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026delegator, \u0026500i128);
-        client.delegate(\u0026delegator, \u0026delegatee);
+        sac_client.mint(&delegator, &500i128);
+        client.delegate(&delegator, &delegatee);
 
         env.ledger().with_mut(|l| {
             l.sequence_number += 1;
         });
 
         // Re-delegate to the same address \u2014 should be a no-op.
-        client.delegate(\u0026delegator, \u0026delegatee);
+        client.delegate(&delegator, &delegatee);
 
-        assert_eq!(client.get_votes(\u0026delegatee), 500);
-        assert_eq!(client.get_past_total_supply(\u0026env.ledger().sequence()), 500);
+        assert_eq!(client.get_votes(&delegatee), 500);
+        assert_eq!(client.get_past_total_supply(&env.ledger().sequence()), 500);
     }
 
     /// `get_votes` on an account that has never been delegated to must return 0.
@@ -1241,14 +1258,14 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let nobody = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let nobody = Address::generate(&env);
 
-        let (contract_id, _token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, _token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
-        assert_eq!(client.get_votes(\u0026nobody), 0);
-        assert_eq!(client.get_past_votes(\u0026nobody, \u0026env.ledger().sequence()), 0);
+        assert_eq!(client.get_votes(&nobody), 0);
+        assert_eq!(client.get_past_votes(&nobody, &env.ledger().sequence()), 0);
     }
 
     /// Multiple sequential re-delegations: voting power must follow the chain
@@ -1258,46 +1275,46 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let a = Address::generate(\u0026env);
-        let b = Address::generate(\u0026env);
-        let c = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let c = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026delegator, \u00261000i128);
+        sac_client.mint(&delegator, &1000i128);
 
         env.ledger().with_mut(|l| {
             l.sequence_number = 10;
         });
-        client.delegate(\u0026delegator, \u0026a);
-        assert_eq!(client.get_votes(\u0026a), 1000);
+        client.delegate(&delegator, &a);
+        assert_eq!(client.get_votes(&a), 1000);
 
         env.ledger().with_mut(|l| {
             l.sequence_number = 20;
         });
-        client.delegate(\u0026delegator, \u0026b);
-        assert_eq!(client.get_votes(\u0026a), 0);
-        assert_eq!(client.get_votes(\u0026b), 1000);
+        client.delegate(&delegator, &b);
+        assert_eq!(client.get_votes(&a), 0);
+        assert_eq!(client.get_votes(&b), 1000);
 
         env.ledger().with_mut(|l| {
             l.sequence_number = 30;
         });
-        client.delegate(\u0026delegator, \u0026c);
-        assert_eq!(client.get_votes(\u0026b), 0);
-        assert_eq!(client.get_votes(\u0026c), 1000);
+        client.delegate(&delegator, &c);
+        assert_eq!(client.get_votes(&b), 0);
+        assert_eq!(client.get_votes(&c), 1000);
 
         // Total supply must remain 1000 throughout.
-        assert_eq!(client.get_past_total_supply(\u002630), 1000);
+        assert_eq!(client.get_past_total_supply(&30), 1000);
 
         // Historical snapshots must be accurate for each step.
-        assert_eq!(client.get_past_votes(\u0026a, \u002615), 1000); // while delegated to a
-        assert_eq!(client.get_past_votes(\u0026a, \u002625), 0); // after delegation moved to b
-        assert_eq!(client.get_past_votes(\u0026b, \u002625), 1000); // while delegated to b
-        assert_eq!(client.get_past_votes(\u0026b, \u002635), 0); // after delegation moved to c
+        assert_eq!(client.get_past_votes(&a, &15), 1000); // while delegated to a
+        assert_eq!(client.get_past_votes(&a, &25), 0); // after delegation moved to b
+        assert_eq!(client.get_past_votes(&b, &25), 1000); // while delegated to b
+        assert_eq!(client.get_past_votes(&b, &35), 0); // after delegation moved to c
     }
 
     /// Checkpoint boundary conditions: querying at exactly the checkpoint ledger,
@@ -1307,30 +1324,30 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026delegator, \u0026100i128);
+        sac_client.mint(&delegator, &100i128);
 
         // Checkpoint is written at ledger 50.
         env.ledger().with_mut(|l| {
             l.sequence_number = 50;
         });
-        client.delegate(\u0026delegator, \u0026delegatee);
+        client.delegate(&delegator, &delegatee);
 
         // Exactly at the checkpoint ledger \u2014 must return the recorded value.
-        assert_eq!(client.get_past_votes(\u0026delegatee, \u002650), 100);
+        assert_eq!(client.get_past_votes(&delegatee, &50), 100);
 
         // One ledger before the checkpoint \u2014 no data yet, must return 0.
-        assert_eq!(client.get_past_votes(\u0026delegatee, \u002649), 0);
+        assert_eq!(client.get_past_votes(&delegatee, &49), 0);
 
         // One ledger after the checkpoint \u2014 the last checkpoint still applies.
-        assert_eq!(client.get_past_votes(\u0026delegatee, \u002651), 100);
+        assert_eq!(client.get_past_votes(&delegatee, &51), 100);
     }
 
     /// Voting power at the exact proposal start block mirrors the governor's
@@ -1341,37 +1358,37 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
-        let new_delegator = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+        let new_delegator = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026delegator, \u0026800i128);
-        sac_client.mint(\u0026new_delegator, \u0026200i128);
+        sac_client.mint(&delegator, &800i128);
+        sac_client.mint(&new_delegator, &200i128);
 
         // Snapshot ledger: delegatee has 800 power.
         let proposal_start: u32 = 100;
         env.ledger().with_mut(|l| {
             l.sequence_number = proposal_start;
         });
-        client.delegate(\u0026delegator, \u0026delegatee);
+        client.delegate(&delegator, &delegatee);
 
         // After the snapshot, a new delegation adds 200 more power to delegatee.
         env.ledger().with_mut(|l| {
             l.sequence_number = proposal_start + 10;
         });
-        client.delegate(\u0026new_delegator, \u0026delegatee);
+        client.delegate(&new_delegator, &delegatee);
 
         // Current votes now include both delegators.
-        assert_eq!(client.get_votes(\u0026delegatee), 1000);
+        assert_eq!(client.get_votes(&delegatee), 1000);
 
         // Historical query at proposal_start must reflect only the 800 that
         // existed when the proposal was created \u2014 not the later 200.
-        assert_eq!(client.get_past_votes(\u0026delegatee, \u0026proposal_start), 800);
+        assert_eq!(client.get_past_votes(&delegatee, &proposal_start), 800);
     }
 
     /// Pseudo-fuzz: iterate over a range of token amounts and verify that the
@@ -1381,38 +1398,38 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
         // Use prime-ish amounts to surface any off-by-one aggregation bugs.
         let amounts: [i128; 8] = [1, 7, 13, 97, 101, 503, 1009, 9973];
         let mut expected_total: i128 = 0;
 
-        for (i, \u0026amount) in amounts.iter().enumerate() {
-            let delegator = Address::generate(\u0026env);
-            sac_client.mint(\u0026delegator, \u0026amount);
+        for (i, &amount) in amounts.iter().enumerate() {
+            let delegator = Address::generate(&env);
+            sac_client.mint(&delegator, &amount);
 
             // Advance ledger so each delegation lands on a distinct checkpoint.
             env.ledger().with_mut(|l| {
                 l.sequence_number = ((i as u32) + 1) * 10;
             });
-            client.delegate(\u0026delegator, \u0026delegatee);
+            client.delegate(&delegator, &delegatee);
 
             expected_total += amount;
-            let actual_total = client.get_past_total_supply(\u0026env.ledger().sequence());
+            let actual_total = client.get_past_total_supply(&env.ledger().sequence());
             assert_eq!(
                 actual_total, expected_total,
-                \"total supply mismatch after delegating {} (step {})\",
+                "total supply mismatch after delegating {} (step {})",
                 amount, i
             );
         }
 
         // Delegatee's voting power must also equal the accumulated total.
-        assert_eq!(client.get_votes(\u0026delegatee), expected_total);
+        assert_eq!(client.get_votes(&delegatee), expected_total);
     }
 
     /// Same-ledger re-delegation must merge checkpoints \u2014 no duplicate entries
@@ -1422,47 +1439,47 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
-        let a = Address::generate(\u0026env);
-        let b = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
-        sac_client.mint(\u0026delegator, \u0026300i128);
+        sac_client.mint(&delegator, &300i128);
 
         // First delegation to `a` at ledger 5.
         env.ledger().with_mut(|l| {
             l.sequence_number = 5;
         });
-        client.delegate(\u0026delegator, \u0026a);
+        client.delegate(&delegator, &a);
 
         // Re-delegate to `b` on the *same* ledger \u2014 `a` and `b` checkpoints at
         // ledger 5 must each be a single merged entry, not duplicate rows.
-        client.delegate(\u0026delegator, \u0026b);
+        client.delegate(&delegator, &b);
 
-        assert_eq!(client.get_votes(\u0026a), 0);
-        assert_eq!(client.get_votes(\u0026b), 300);
+        assert_eq!(client.get_votes(&a), 0);
+        assert_eq!(client.get_votes(&b), 300);
 
         // Verify checkpoint counts via direct storage inspection.
-        let (a_count, b_count) = env.as_contract(\u0026contract_id, || {
-            let a_cps: soroban_sdk::Vec\u003cCheckpoint\u003e = env
+        let (a_count, b_count) = env.as_contract(&contract_id, || {
+            let a_cps: soroban_sdk::Vec<Checkpoint> = env
                 .storage()
                 .persistent()
-                .get(\u0026DataKey::Checkpoints(a.clone()))
-                .unwrap_or(soroban_sdk::Vec::new(\u0026env));
-            let b_cps: soroban_sdk::Vec\u003cCheckpoint\u003e = env
+                .get(&DataKey::Checkpoints(a.clone()))
+                .unwrap_or(soroban_sdk::Vec::new(&env));
+            let b_cps: soroban_sdk::Vec<Checkpoint> = env
                 .storage()
                 .persistent()
-                .get(\u0026DataKey::Checkpoints(b.clone()))
-                .unwrap_or(soroban_sdk::Vec::new(\u0026env));
+                .get(&DataKey::Checkpoints(b.clone()))
+                .unwrap_or(soroban_sdk::Vec::new(&env));
             (a_cps.len(), b_cps.len())
         });
 
-        assert_eq!(a_count, 1, \"a should have exactly one merged checkpoint\");
-        assert_eq!(b_count, 1, \"b should have exactly one checkpoint\");
+        assert_eq!(a_count, 1, "a should have exactly one merged checkpoint");
+        assert_eq!(b_count, 1, "b should have exactly one checkpoint");
     }
 
     #[test]
@@ -1470,15 +1487,15 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let (contract_id, _) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let admin = Address::generate(&env);
+        let (contract_id, _) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
         // Default retention period should be 100800
         assert_eq!(client.checkpoint_retention_period(), 100800);
 
         // Set new retention period
-        client.set_checkpoint_retention_period(\u002650000u32);
+        client.set_checkpoint_retention_period(&50000u32);
         assert_eq!(client.checkpoint_retention_period(), 50000);
     }
 
@@ -1490,32 +1507,32 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator, \u00261000i128);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator, &1000i128);
 
         // Create checkpoints at ledgers 10, 20, 30, 40 by re-delegating to
         // different delegatees each time (same delegatee is a no-op).
-        let d1 = Address::generate(\u0026env);
-        let d2 = Address::generate(\u0026env);
-        let d3 = Address::generate(\u0026env);
-        let d4 = Address::generate(\u0026env);
+        let d1 = Address::generate(&env);
+        let d2 = Address::generate(&env);
+        let d3 = Address::generate(&env);
+        let d4 = Address::generate(&env);
 
         env.ledger().with_mut(|l| l.sequence_number = 10);
-        client.delegate(\u0026delegator, \u0026d1);
+        client.delegate(&delegator, &d1);
 
         env.ledger().with_mut(|l| l.sequence_number = 20);
-        client.delegate(\u0026delegator, \u0026d2);
+        client.delegate(&delegator, &d2);
 
         env.ledger().with_mut(|l| l.sequence_number = 30);
-        client.delegate(\u0026delegator, \u0026d3);
+        client.delegate(&delegator, &d3);
 
         env.ledger().with_mut(|l| l.sequence_number = 40);
-        client.delegate(\u0026delegator, \u0026d4);
+        client.delegate(&delegator, &d4);
 
         // d4 now has 4 checkpoints (gained at 40, d3 lost at 30\u219240, etc.)
         // Actually each delegatee gets one checkpoint. d1 has checkpoints at 10 and 20 (gain then lose).
@@ -1523,16 +1540,16 @@ mod tests {
         // Set retention period to 15 ledgers; current ledger = 40
         // cutoff = 40 - 15 = 25 \u2192 checkpoints at ledger \u2264 25 are candidates
         // d1 has checkpoints at 10 (+1000) and 20 (0) \u2014 ledger 20 is the anchor, ledger 10 is pruned
-        client.set_checkpoint_retention_period(\u002615u32);
+        client.set_checkpoint_retention_period(&15u32);
         env.ledger().with_mut(|l| l.sequence_number = 40);
 
-        let pruned = client.prune_checkpoints(\u0026None);
-        assert!(pruned \u003e 0, \"expected pruned \u003e 0, got {}\", pruned);
+        let pruned = client.prune_checkpoints(&None);
+        assert!(pruned > 0, "expected pruned > 0, got {}", pruned);
 
         // Historical query at ledger 20 (the anchor for d1) must still work
-        assert_eq!(client.get_past_votes(\u0026d1, \u002620), 0);
+        assert_eq!(client.get_past_votes(&d1, &20), 0);
         // d4 still has current votes
-        assert_eq!(client.get_votes(\u0026d4), 1000);
+        assert_eq!(client.get_votes(&d4), 1000);
     }
 
     /// After pruning, historical queries at the cutoff boundary still return correct values.
@@ -1541,36 +1558,36 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegator1 = Address::generate(\u0026env);
-        let delegator2 = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegator1 = Address::generate(&env);
+        let delegator2 = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026delegator1, \u0026500i128);
-        sac_client.mint(\u0026delegator2, \u0026300i128);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&delegator1, &500i128);
+        sac_client.mint(&delegator2, &300i128);
 
         // ledger 5: delegator1 delegates \u2192 delegatee has 500
         env.ledger().with_mut(|l| l.sequence_number = 5);
-        client.delegate(\u0026delegator1, \u0026delegatee);
+        client.delegate(&delegator1, &delegatee);
 
         // ledger 50: delegator2 delegates \u2192 delegatee has 800
         env.ledger().with_mut(|l| l.sequence_number = 50);
-        client.delegate(\u0026delegator2, \u0026delegatee);
+        client.delegate(&delegator2, &delegatee);
 
         // ledger 100: prune with retention=30 \u2192 cutoff=70
         // checkpoint at ledger 5 is the anchor (last at/before 70), kept
         // checkpoint at ledger 50 is also at/before 70, so ledger 5 is pruned
         env.ledger().with_mut(|l| l.sequence_number = 100);
-        client.set_checkpoint_retention_period(\u002630u32);
-        client.prune_checkpoints(\u0026None);
+        client.set_checkpoint_retention_period(&30u32);
+        client.prune_checkpoints(&None);
 
         // Query at ledger 50 (the anchor after pruning) must still be correct
-        assert_eq!(client.get_past_votes(\u0026delegatee, \u002650), 800);
+        assert_eq!(client.get_past_votes(&delegatee, &50), 800);
         // Current votes unchanged
-        assert_eq!(client.get_votes(\u0026delegatee), 800);
+        assert_eq!(client.get_votes(&delegatee), 800);
     }
 
     /// prune_checkpoints returns the actual count of pruned entries.
@@ -1579,29 +1596,29 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
 
         // Create 5 delegators each at a different ledger
         for i in 1u32..=5 {
-            let delegator = Address::generate(\u0026env);
-            sac_client.mint(\u0026delegator, \u0026100i128);
+            let delegator = Address::generate(&env);
+            sac_client.mint(&delegator, &100i128);
             env.ledger().with_mut(|l| l.sequence_number = i * 10);
-            client.delegate(\u0026delegator, \u0026delegatee);
+            client.delegate(&delegator, &delegatee);
         }
 
         // At ledger 60, retention=15 \u2192 cutoff=45
         // Per-account: each delegatee checkpoint at ledger \u2264 45 has candidates
         // Total supply also has stale entries
         env.ledger().with_mut(|l| l.sequence_number = 60);
-        client.set_checkpoint_retention_period(\u002615u32);
+        client.set_checkpoint_retention_period(&15u32);
 
-        let pruned = client.prune_checkpoints(\u0026None);
-        assert!(pruned \u003e 0, \"expected some checkpoints pruned\");
+        let pruned = client.prune_checkpoints(&None);
+        assert!(pruned > 0, "expected some checkpoints pruned");
     }
 
     // \u2014\u2014 delegate_by_sig tests (issue #216) \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014
@@ -1612,74 +1629,74 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let owner = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026owner, \u00261000i128);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&owner, &1000i128);
 
         // Set ledger timestamp so expiry is in the future
         env.ledger().with_mut(|l| l.timestamp = 100);
 
         let nonce = 0u64;
         let expiry = 200u64;
-        let dummy_sig = BytesN::from_array(\u0026env, \u0026[0u8; 64]);
+        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
 
-        client.delegate_by_sig(\u0026owner, \u0026delegatee, \u0026nonce, \u0026expiry, \u0026dummy_sig);
+        client.delegate_by_sig(&owner, &delegatee, &nonce, &expiry, &dummy_sig);
 
         // Delegation should have been applied
-        assert_eq!(client.get_votes(\u0026delegatee), 1000);
-        assert_eq!(client.delegates(\u0026owner), Some(delegatee.clone()));
+        assert_eq!(client.get_votes(&delegatee), 1000);
+        assert_eq!(client.delegates(&owner), Some(delegatee.clone()));
     }
 
     /// Expired signature must be rejected.
     #[test]
-    #[should_panic(expected = \"signature expired\")]
+    #[should_panic(expected = "signature expired")]
     fn test_delegate_by_sig_expired() {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let owner = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, _) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
+        let (contract_id, _) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
 
         env.ledger().with_mut(|l| l.timestamp = 500);
 
-        let dummy_sig = BytesN::from_array(\u0026env, \u0026[0u8; 64]);
+        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
         // expiry is in the past
-        client.delegate_by_sig(\u0026owner, \u0026delegatee, \u00260u64, \u0026100u64, \u0026dummy_sig);
+        client.delegate_by_sig(&owner, &delegatee, &0u64, &100u64, &dummy_sig);
     }
 
     /// Replayed nonce must be rejected.
     #[test]
-    #[should_panic(expected = \"invalid nonce\")]
+    #[should_panic(expected = "invalid nonce")]
     fn test_delegate_by_sig_replayed_nonce() {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let owner = Address::generate(\u0026env);
-        let delegatee = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegatee = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026owner, \u0026500i128);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&owner, &500i128);
 
         env.ledger().with_mut(|l| l.timestamp = 100);
-        let dummy_sig = BytesN::from_array(\u0026env, \u0026[0u8; 64]);
+        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
 
         // First call with nonce=0 succeeds
-        client.delegate_by_sig(\u0026owner, \u0026delegatee, \u00260u64, \u00269999u64, \u0026dummy_sig);
+        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
 
         // Second call with nonce=0 must fail (nonce is now 1)
-        client.delegate_by_sig(\u0026owner, \u0026delegatee, \u00260u64, \u00269999u64, \u0026dummy_sig);
+        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
     }
 
     /// Nonce is incremented after a successful delegate_by_sig call.
@@ -1688,29 +1705,29 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(\u0026env);
-        let owner = Address::generate(\u0026env);
-        let delegatee1 = Address::generate(\u0026env);
-        let delegatee2 = Address::generate(\u0026env);
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegatee1 = Address::generate(&env);
+        let delegatee2 = Address::generate(&env);
 
-        let (contract_id, token_addr) = setup(\u0026env, \u0026admin);
-        let client = TokenVotesContractClient::new(\u0026env, \u0026contract_id);
-        let sac_client = token::StellarAssetClient::new(\u0026env, \u0026token_addr);
-        sac_client.mint(\u0026owner, \u0026300i128);
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&owner, &300i128);
 
         env.ledger().with_mut(|l| l.timestamp = 1);
-        let dummy_sig = BytesN::from_array(\u0026env, \u0026[0u8; 64]);
+        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
 
         // nonce=0 succeeds
-        client.delegate_by_sig(\u0026owner, \u0026delegatee1, \u00260u64, \u00269999u64, \u0026dummy_sig);
-        assert_eq!(client.get_votes(\u0026delegatee1), 300);
+        client.delegate_by_sig(&owner, &delegatee1, &0u64, &9999u64, &dummy_sig);
+        assert_eq!(client.get_votes(&delegatee1), 300);
 
         env.ledger().with_mut(|l| l.sequence_number += 1);
 
         // nonce=1 succeeds (re-delegation)
-        client.delegate_by_sig(\u0026owner, \u0026delegatee2, \u00261u64, \u00269999u64, \u0026dummy_sig);
-        assert_eq!(client.get_votes(\u0026delegatee1), 0);
-        assert_eq!(client.get_votes(\u0026delegatee2), 300);
+        client.delegate_by_sig(&owner, &delegatee2, &1u64, &9999u64, &dummy_sig);
+        assert_eq!(client.get_votes(&delegatee1), 0);
+        assert_eq!(client.get_votes(&delegatee2), 300);
     }
 
 }

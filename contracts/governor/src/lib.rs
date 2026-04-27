@@ -1801,6 +1801,19 @@ impl GovernorContract {
     pub fn proxy_admin(env: Env) -> Address {
         env.current_contract_address()
     }
+
+    /// Get a proposal by ID.
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
+        Self::must_get_proposal(&env, proposal_id)
+    }
+
+    /// Get the ledger sequence when a proposal was queued.
+    pub fn get_queue_time(env: Env, proposal_id: u64) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::QueueTime(proposal_id))
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]

@@ -404,6 +404,26 @@ export class TimelockClient {
     return false;
   }
 
+  /**
+   * Get the configured execution window (in seconds).
+   */
+  async executionWindow(): Promise<bigint> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.readAccount()),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+      )
+        .addOperation(this.contract.call("execution_window"))
+        .setTimeout(30)
+        .build()
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
   // --- Internal ---
 
   private readAccount(): string {

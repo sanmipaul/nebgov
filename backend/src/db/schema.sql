@@ -99,3 +99,31 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
+
+-- Security alerts table
+CREATE TABLE IF NOT EXISTS security_alerts (
+  id SERIAL PRIMARY KEY,
+  type TEXT NOT NULL, -- e.g., 'LARGE_TRANSFER', 'PAUSE_DETECTED', 'SUSPICIOUS_PROPOSAL'
+  severity TEXT NOT NULL, -- e.g., 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'
+  message TEXT NOT NULL,
+  metadata JSONB, -- Additional details like proposal_id, amount, addresses
+  resolved BOOLEAN DEFAULT false,
+  resolved_at TIMESTAMP,
+  resolved_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_alerts_type ON security_alerts(type);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_severity ON security_alerts(severity);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_created_at ON security_alerts(created_at DESC);
+
+-- Monitoring state table
+CREATE TABLE IF NOT EXISTS monitoring_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Initialize last processed ledger for various contracts if needed
+INSERT INTO monitoring_state (key, value) VALUES ('last_processed_ledger', '0')
+ON CONFLICT (key) DO NOTHING;

@@ -24,7 +24,10 @@ import {
   VoteType,
   Network,
   UnknownProposalStateError,
+  TimelockInfo,
 } from "./types";
+
+import { TimelockClient } from "./timelock";
 
 /** Options for uploading proposal metadata to IPFS. */
 export interface MetadataUploadOptions {
@@ -37,6 +40,7 @@ export interface MetadataUploadOptions {
   /** Custom uploader function for other IPFS gateways */
   customUploader?: (content: string) => Promise<string>;
 }
+
 import { GovernorError, GovernorErrorCode } from "./errors";
 import { hexToBytes32, withRetry } from "./utils";
 
@@ -1516,6 +1520,70 @@ export class GovernorClient {
 
       return scValToNative(raw) as Proposal;
     });
+  }
+
+  /**
+   * Fetch the ledger sequence when a proposal was queued.
+   * Returns 0 if the proposal was not queued.
+   */
+  async getQueueTime(proposalId: bigint): Promise<number> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.readAccount()),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+      )
+        .addOperation(
+          this.contract.call("get_queue_time", nativeToScVal(proposalId, { type: "u64" }))
+        )
+        .setTimeout(30)
+        .build()
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) return 0;
+
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    return raw ? (scValToNative(raw) as number) : 0;
+  }
+
+  /**
+   * Fetch timelock-related timings for a queued proposal.
+   */
+  async getTimelockInfo(proposalId: bigint): Promise<TimelockInfo> {
+    const queueLedger = await this.getQueueTime(proposalId);
+    if (queueLedger === 0) {
+      throw new Error(`Proposal ${proposalId} not queued or not found`);
+    }
+
+    const [settings, timelockClient] = await Promise.all([
+      this.getSettings(),
+      Promise.resolve(new TimelockClient(this.config)),
+    ]);
+
+    const [minDelay, executionWindow] = await Promise.all([
+      timelockClient.minDelay(),
+      timelockClient.executionWindow(),
+    ]);
+
+    // Conversion logic: roughly 1 ledger per 10 seconds for veto window
+    // and for estimating executable/deadline ledgers.
+    const votingDelay = settings.votingDelay;
+    
+    // Per requirement: Use QueueTime + voting_delay/10
+    const vetoWindowEndLedger = queueLedger + Math.floor(votingDelay / 10);
+    
+    // Executable after min_delay
+    const executableAtLedger = queueLedger + Math.floor(Number(minDelay) / 10);
+    
+    // Deadline after execution_window
+    const executionDeadlineLedger = executableAtLedger + Math.floor(Number(executionWindow) / 10);
+
+    return {
+      queueLedger,
+      vetoWindowEndLedger,
+      executableAtLedger,
+      executionDeadlineLedger,
+    };
   }
 }
 

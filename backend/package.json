@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^8.5.0",
+    "@stellar/stellar-sdk": "^15.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

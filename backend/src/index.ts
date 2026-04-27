@@ -7,6 +7,8 @@ import competitionsRouter from "./routes/competitions";
 import leaderboardRouter from "./routes/leaderboard";
 import authRouter from "./routes/auth";
 import notificationsRouter from "./routes/notifications";
+import securityRouter from "./routes/security";
+import { securityMonitor } from "./services/security-monitor";
 import pino from "pino";
 import pinoHttp from "pino-http";
 import swaggerUi from "swagger-ui-express";
@@ -86,6 +88,7 @@ app.use("/competitions", competitionsRouter);
 app.use("/leaderboard/history", leaderboardLimiter);
 app.use("/leaderboard", leaderboardRouter);
 app.use("/notifications", notificationsRouter);
+app.use("/security", securityRouter);
 
 // Error handling
 app.use(
@@ -103,6 +106,11 @@ app.use(
 if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     console.log(`Backend server running on port ${PORT}`);
+    
+    // Start the security monitor
+    securityMonitor.start().catch(err => {
+      console.error("Failed to start security monitor:", err);
+    });
   });
 }
 

@@ -88,6 +88,13 @@ export interface TimelockOperation {
   cancelled: boolean;
 }
 
+export interface TimelockInfo {
+  queueLedger: number;
+  vetoWindowEndLedger: number;
+  executableAtLedger: number;
+  executionDeadlineLedger: number;
+}
+
 export interface TreasuryTx {
   id: bigint;
   proposer: string;

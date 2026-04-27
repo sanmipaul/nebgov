@@ -142,6 +142,44 @@ export class VotesClient {
   }
 
   /**
+   * Transfer voting tokens and delegate in one atomic transaction.
+   * Auth is required only from `signer` (`from`).
+   */
+  async transferAndDelegate(
+    signer: Keypair,
+    to: string,
+    amount: bigint,
+    delegatee: string,
+  ): Promise<void> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "transfer_and_delegate",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(to, { type: "address" }),
+            nativeToScVal(amount, { type: "i128" }),
+            nativeToScVal(delegatee, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
    * Get current voting power of an address.
    */
   async getVotes(account: string): Promise<bigint> {
