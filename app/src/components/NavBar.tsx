@@ -24,6 +24,16 @@ import { useTheme } from "../hooks/useTheme";
 import { useTranslations } from "next-intl";
 import toast from "react-hot-toast";
 import { loadNotificationHistory } from "../lib/governance-notifications";
+import { useGovernanceBalance } from "../lib/use-governance-balance";
+
+function formatGovernanceAmount(v: bigint): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return `${v.toString()} GOV`;
+  if (n >= 10_000) {
+    return `${new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 2 }).format(n)} GOV`;
+  }
+  return `${new Intl.NumberFormat("en").format(n)} GOV`;
+}
 
 const NAV_LINKS = [
   { name: "Proposals", href: "/", icon: LayoutDashboard },
@@ -40,6 +50,7 @@ export function NavBar() {
   const pathname = usePathname();
   const { address, publicKey, isConnected, isConnecting, connect, disconnect } =
     useWallet();
+  const gov = useGovernanceBalance(isConnected ? publicKey : null);
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isWalletMenuOpen, setIsWalletMenuOpen] = useState(false);
@@ -205,6 +216,22 @@ export function NavBar() {
                     aria-hidden
                   />
                   <span className="max-w-[9rem] truncate">{address}</span>
+                  {gov.loading ? (
+                    <span className="ml-1 inline-flex items-center">
+                      <span className="h-4 w-14 rounded-full bg-gray-200 dark:bg-gray-700 animate-pulse" />
+                    </span>
+                  ) : gov.baseVotes !== null && gov.votingPower !== null ? (
+                    <span
+                      className="ml-1 px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-200 text-xs font-semibold"
+                      title={[
+                        `Raw: ${formatGovernanceAmount(gov.baseVotes)}`,
+                        `Voting power: ${formatGovernanceAmount(gov.votingPower)}`,
+                        `Delegatee: ${gov.delegatee ?? "—"}`,
+                      ].join("\n")}
+                    >
+                      {formatGovernanceAmount(gov.baseVotes)}
+                    </span>
+                  ) : null}
                   <ChevronDown
                     className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
                       isWalletMenuOpen ? "rotate-180" : ""

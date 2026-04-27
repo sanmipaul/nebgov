@@ -3,7 +3,7 @@
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, token,
-    Address, Bytes, Env, Symbol, Vec,
+    Address, Bytes, Env, Symbol, Val, Vec,
 };
 
 const DEFAULT_PENDING_EXPIRY_LEDGERS: u32 = 17_280;
@@ -271,7 +271,8 @@ impl TreasuryContract {
 
             // Lock execution path to reject reentrant approve/cancel/submit.
             env.storage().instance().set(&DataKey::IsExecuting, &true);
-            env.invoke_contract::<()>(&tx.target, &tx.fn_name, Vec::new(&env));
+            let args = Self::decode_invocation_args(&env, &tx.data);
+            env.invoke_contract::<()>(&tx.target, &tx.fn_name, args);
             env.storage().instance().set(&DataKey::IsExecuting, &false);
             env.events().publish((symbol_short!("execute"),), tx_id);
         } else {
@@ -418,6 +419,20 @@ impl TreasuryContract {
 
     pub fn is_treasury_owner(env: Env, addr: Address) -> bool {
         Self::is_owner(&env, &addr)
+    }
+
+    fn decode_invocation_args(env: &Env, data: &Bytes) -> Vec<Val> {
+        if data.is_empty() {
+            return Vec::new(env);
+        }
+
+        if let Ok(args) = Vec::<Val>::from_xdr(env, data) {
+            return args;
+        }
+
+        // Preserve compatibility with legacy callers that used opaque bytes for
+        // no-arg calls before structured calldata decoding was implemented.
+        Vec::new(env)
     }
 
     // --- Internal helpers ---

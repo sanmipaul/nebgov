@@ -54,6 +54,8 @@ export interface ProposalVote {
   support: number;
   weight: string;
   created_at: string;
+  reason?: string | null;
+  ledger?: number | string | null;
 }
 
 export interface VotesResponse {
@@ -74,4 +76,3 @@ export async function fetchProposalVotes(
     `/api/proposals/${proposalId}/votes?page=${page}&pageSize=${pageSize}&sort=${sort}`
   );
 }
-

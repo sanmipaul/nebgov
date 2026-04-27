@@ -9,6 +9,8 @@ interface Vote {
   support: number;
   weight: string;
   created_at: string;
+  reason?: string | null;
+  ledger?: number | string | null;
 }
 
 interface VotesResponse {
