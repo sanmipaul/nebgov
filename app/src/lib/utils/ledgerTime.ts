@@ -80,3 +80,19 @@ export function getProposalTimeInfo(
 
   return null;
 }
+
+/**
+ * Get a specific countdown for a target ledger.
+ */
+export function getTimerInfo(
+  label: string,
+  targetLedger: number,
+  currentLedger: number
+): ProposalTimeInfo | null {
+  if (currentLedger === 0 || targetLedger <= currentLedger) return null;
+  return {
+    label,
+    countdown: formatCountdown(ledgerToEstimatedDate(targetLedger, currentLedger)),
+    targetLedger,
+  };
+}

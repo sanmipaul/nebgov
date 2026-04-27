@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { VoteSupport, ProposalState, VotesClient, GovernorClient, VoteType, type GovernorSettings, type Network } from "@nebgov/sdk";
-import { AlertTriangle, Info, ExternalLink, Loader2, ChevronUp, ChevronDown } from "lucide-react";
+import { VoteSupport, ProposalState, VotesClient, GovernorClient, VoteType, type GovernorSettings, type Network, type TimelockInfo } from "@nebgov/sdk";
+import { AlertTriangle, Info, ExternalLink, Loader2, ChevronUp, ChevronDown, Clock, ShieldCheck, Zap } from "lucide-react";
 import { useWallet } from "../../../lib/wallet-context";
 import { DelegateModal } from "../../../components/DelegateModal";
 import { VotingModal } from "../../../components/VotingModal";
+import { CountdownTimer } from "../../../components/CountdownTimer";
 import { fetchProposalMetadata, verifyMetadataHash } from "../../../lib/metadata";
 import { fetchProposalVotes, type ProposalVote } from "../../../lib/backend";
 import {
@@ -16,282 +17,313 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
-  ReferenceLine
+  PieChart,
+  Pie
 } from "recharts";
 
-import { useTheme } from "../../../hooks/useTheme";
-
-interface Props {
-  params: { id: string };
+interface Proposal {
+  id: string;
+  proposer: string;
+  description: string;
+  descriptionHash: string;
+  uri: string;
+  status: ProposalState;
+  votes: {
+    for: bigint;
+    against: bigint;
+    abstain: bigint;
+  };
+  startLedger: number;
+  endLedger: number;
 }
 
-// Initial state for proposal to avoid undefined errors during loading
-const INITIAL_PROPOSAL = {
-  id: 0n,
-  description: "Loading...",
-  descriptionHash: "",
-  metadataUri: "",
-  state: ProposalState.Pending,
-  votesFor: 0n,
-  votesAgainst: 0n,
-  votesAbstain: 0n,
-  endLedger: 0,
-  proposer: "",
-  quorum: 0n,
-};
-
-export default function ProposalDetailPage({ params }: Props) {
-  const proposalId = useMemo(() => BigInt(params.id), [params.id]);
-  const [proposal, setProposal] = useState(INITIAL_PROPOSAL);
+export default function ProposalDetailPage({ params }: { params: { id: string } }) {
+  const { address, network } = useWallet();
+  const [proposal, setProposal] = useState<Proposal | null>(null);
   const [loading, setLoading] = useState(true);
-  const [metadata, setMetadata] = useState<string | null>(null);
-  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<{ title: string; description: string } | null>(null);
   const [hashMismatched, setHashMismatched] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-
-  const [voted, setVoted] = useState(false);
-  const [selectedSupport, setSelectedSupport] = useState<VoteSupport | null>(null);
-  const [delegateModalOpen, setDelegateModalOpen] = useState(false);
-  const [voteModalOpen, setVoteModalOpen] = useState(false);
-  const [votingPower, setVotingPower] = useState<bigint>(0n);
-  const [delegationLoading, setDelegationLoading] = useState(false);
-  const [isVoting, setIsVoting] = useState(false);
-  const [voteSuccess, setVoteSuccess] = useState(false);
-  const [voteError, setVoteError] = useState<string | null>(null);
-  const [votedSupport, setVotedSupport] = useState<VoteSupport | null>(null);
-  const [voteType, setVoteType] = useState<VoteType>(VoteType.Simple);
-
-  // Votes pagination
+  const [fetchError, setFetchError] = useState(false);
   const [votes, setVotes] = useState<ProposalVote[]>([]);
-  const [votesPage, setVotesPage] = useState(0);
-  const [votesLoading, setVotesLoading] = useState(false);
-  const [votesTotal, setVotesTotal] = useState(0);
-  const [votesHasMore, setVotesHasMore] = useState(false);
-  const [votesSort, setVotesSort] = useState<"newest" | "weight" | "address">("newest");
+  const [showDelegateModal, setShowDelegateModal] = useState(false);
+  const [showVotingModal, setShowVotingModal] = useState(false);
+  const [selectedVoteType, setSelectedVoteType] = useState<VoteType | null>(null);
+  const [governorSettings, setGovernorSettings] = useState<GovernorSettings | null>(null);
+  const [timelockInfo, setTimelockInfo] = useState<TimelockInfo | null>(null);
 
-  const loadVotes = useCallback(async (pageNum: number, append = false) => {
-    setVotesLoading(true);
-    try {
-      const result = await fetchProposalVotes(
-        params.id,
-        pageNum,
-        20,
-        votesSort
-      );
-      if (append) {
-        setVotes((prev) => [...prev, ...result.votes]);
-      } else {
-        setVotes(result.votes);
-      }
-      setVotesTotal(result.total);
-      setVotesHasMore(result.hasMore);
-    } catch (err) {
-      console.error("Failed to load votes:", err);
-    } finally {
-      setVotesLoading(false);
-    }
-  }, [params.id, votesSort]);
-
-  const loadMoreVotes = () => {
-    if (!votesLoading && votesHasMore) {
-      loadVotes(votesPage + 1, true);
-      setVotesPage((p) => p + 1);
-    }
-  };
-
-  const { publicKey, isConnected, signTransaction } = useWallet();
-  const { theme } = useTheme();
-  const isDark = theme === "dark";
-
-  const config = useMemo(() => {
-    const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-    const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-    const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-    const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
-    const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
-
-    if (!governorAddress || !timelockAddress || !votesAddress) return null;
-
-    return {
-      governorAddress,
-      timelockAddress,
-      votesAddress,
-      network,
-      ...(rpcUrl && { rpcUrl }),
-    };
-  }, []);
-
-  const votesClient = useMemo(() => config ? new VotesClient(config) : null, [config]);
-  const governorClient = useMemo(() => config ? new GovernorClient(config) : null, [config]);
+  const governorClient = useMemo(() => new GovernorClient(network), [network]);
+  const votesClient = useMemo(() => new VotesClient(network), [network]);
 
   const loadProposal = useCallback(async () => {
-    if (!governorClient) return;
-    setLoading(true);
     try {
-      const p = await governorClient.getProposal(proposalId);
-      setProposal({
-        ...p,
-        state: await governorClient.getProposalState(proposalId),
-      });
-    } catch (err) {
-      console.error("Failed to load proposal:", err);
+      setLoading(true);
+      const p = await governorClient.getProposal(params.id);
+      
+      // Convert SDK proposal to local Proposal interface
+      const localProposal: Proposal = {
+        id: p.id.toString(),
+        proposer: p.proposer,
+        description: "", // Will be filled from metadata
+        descriptionHash: p.descriptionHash.toString("hex"),
+        uri: p.link,
+        status: p.status,
+        votes: {
+          for: p.votes.for,
+          against: p.votes.against,
+          abstain: p.votes.abstain,
+        },
+        startLedger: p.startLedger,
+        endLedger: p.endLedger,
+      };
+      
+      setProposal(localProposal);
+
+      // Fetch metadata
+      try {
+        const meta = await fetchProposalMetadata(p.link);
+        setMetadata(meta);
+        
+        // Verify hash
+        const isValid = verifyMetadataHash(JSON.stringify(meta), p.descriptionHash);
+        setHashMismatched(!isValid);
+      } catch (e) {
+        console.error("Failed to fetch metadata:", e);
+        setFetchError(true);
+      }
+
+      // Fetch votes from backend
+      try {
+        const v = await fetchProposalVotes(params.id);
+        setVotes(v);
+      } catch (e) {
+        console.error("Failed to fetch votes:", e);
+      }
+
+      // Fetch governor settings
+      try {
+        const settings = await governorClient.getSettings();
+        setGovernorSettings(settings);
+      } catch (e) {
+        console.error("Failed to fetch governor settings:", e);
+      }
+
+      // Fetch timelock info if in Queued state
+      if (p.status === ProposalState.Queued) {
+        try {
+          const info = await governorClient.getProposalTimelockInfo(params.id);
+          setTimelockInfo(info);
+        } catch (e) {
+          console.error("Failed to fetch timelock info:", e);
+        }
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to load proposal");
     } finally {
       setLoading(false);
     }
-  }, [governorClient, proposalId]);
+  }, [params.id, governorClient, network]);
 
   useEffect(() => {
     loadProposal();
   }, [loadProposal]);
 
-  useEffect(() => {
-    if (!governorClient) return;
-    governorClient.getSettings().then((s: GovernorSettings) => setVoteType(s.voteType)).catch(() => {});
-  }, [governorClient]);
+  const voteData = useMemo(() => {
+    if (!proposal) return [];
+    const total = proposal.votes.for + proposal.votes.against + proposal.votes.abstain;
+    if (total === 0n) return [
+      { name: "For", value: 0, color: "#22c55e" },
+      { name: "Against", value: 0, color: "#ef4444" },
+      { name: "Abstain", value: 0, color: "#94a3b8" },
+    ];
+    
+    return [
+      { name: "For", value: Number(proposal.votes.for), color: "#22c55e" },
+      { name: "Against", value: Number(proposal.votes.against), color: "#ef4444" },
+      { name: "Abstain", value: Number(proposal.votes.abstain), color: "#94a3b8" },
+    ];
+  }, [proposal]);
 
-  const loadMetadata = useCallback(async () => {
-    if (!proposal.metadataUri) return;
-    setMetadataLoading(true);
-    setFetchError(null);
-    try {
-      const content = await fetchProposalMetadata(proposal.metadataUri);
-      setMetadata(content);
-      const isMatch = await verifyMetadataHash(content, proposal.descriptionHash);
-      setHashMismatched(!isMatch);
-    } catch (err: any) {
-      setFetchError(err.message);
-    } finally {
-      setMetadataLoading(false);
-    }
-  }, [proposal.metadataUri, proposal.descriptionHash]);
-
-  useEffect(() => {
-    if (proposal.id !== 0n) {
-      loadMetadata();
-    }
-  }, [proposal.id, loadMetadata]);
-
-  async function refreshDelegation() {
-    if (!votesClient || !publicKey) return;
-    setDelegationLoading(true);
-    try {
-      const power = await votesClient.getVotes(publicKey);
-      setVotingPower(power);
-    } catch (err) {
-      console.error("Failed to fetch voting power:", err);
-    } finally {
-      setDelegationLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (isConnected) {
-      refreshDelegation();
-    }
-  }, [isConnected, votesClient, publicKey]);
-
-  useEffect(() => {
-    loadVotes(0, false);
-  }, [loadVotes]);
-
-  // Transform data for Recharts
-  const chartData = useMemo(() => [
-    { name: "For", votes: Number(proposal.votesFor) },
-    { name: "Against", votes: Number(proposal.votesAgainst) },
-    { name: "Abstain", votes: Number(proposal.votesAbstain) },
-  ], [proposal.votesFor, proposal.votesAgainst, proposal.votesAbstain]);
-
-  const COLORS: Record<string, string> = {
-    For: "#10b981",    // green-500
-    Against: "#f43f5e", // rose-500
-    Abstain: isDark ? "#475569" : "#94a3b8", // slate-600 : slate-400
+  const statusColors = {
+    [ProposalState.Pending]: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+    [ProposalState.Active]: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    [ProposalState.Canceled]: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+    [ProposalState.Defeated]: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400",
+    [ProposalState.Succeeded]: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    [ProposalState.Queued]: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400",
+    [ProposalState.Expired]: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    [ProposalState.Executed]: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
   };
 
-  const totalVotes = proposal.votesFor + proposal.votesAgainst + proposal.votesAbstain;
-
-  async function handleCastVote() {
-    if (selectedSupport === null || !governorClient || !publicKey || isVoting) return;
-
-    setIsVoting(true);
-    setVoteError(null);
-    setVoteSuccess(false);
-
-    try {
-      await governorClient.castVoteWithSign(
-        publicKey,
-        proposalId,
-        selectedSupport,
-        signTransaction
-      );
-
-      setVoteSuccess(true);
-      setVotedSupport(selectedSupport);
-      setVoted(true);
-      await loadProposal();
-    } catch (err: any) {
-      console.error("Vote submission failed:", err);
-      let message = "An unknown error occurred while casting your vote.";
-
-      const errStr = String(err);
-      if (errStr.includes("already voted") || errStr.includes("Already voted") || errStr.includes("Error(Contract, #1)")) {
-        message = "You have already voted on this proposal.";
-      } else if (errStr.includes("Proposal not active") || errStr.includes("Error(Contract, #2)")) {
-        message = "This proposal is no longer accepting votes.";
-      } else if (errStr.includes("zero voting power") || errStr.includes("Insufficient voting power") || errStr.includes("Error(Contract, #3)")) {
-        message = "You do not have sufficient voting power to vote on this proposal.";
-      }
-
-      setVoteError(message);
-    } finally {
-      setIsVoting(false);
-    }
-  }
+  const statusLabels = {
+    [ProposalState.Pending]: "Pending",
+    [ProposalState.Active]: "Active",
+    [ProposalState.Canceled]: "Canceled",
+    [ProposalState.Defeated]: "Defeated",
+    [ProposalState.Succeeded]: "Succeeded",
+    [ProposalState.Queued]: "Queued",
+    [ProposalState.Expired]: "Expired",
+    [ProposalState.Executed]: "Executed",
+  };
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin mb-4" />
-        <p>Loading proposal data...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
+        <p className="text-gray-500 font-medium">Loading proposal details...</p>
+      </div>
+    );
+  }
+
+  if (error || !proposal) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12">
+        <div className="bg-red-50 border border-red-200 rounded-2xl p-8 text-center">
+          <AlertTriangle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-red-900 mb-2">Error Loading Proposal</h2>
+          <p className="text-red-700 mb-6">{error || "Proposal not found"}</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="px-6 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-8">
-      <div className="flex items-center gap-2 mb-1">
-        <p className="text-sm text-gray-400">
-          Proposal #{params.id}
-        </p>
-        <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider
-          ${proposal.state === ProposalState.Active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
-          {ProposalState[proposal.state]}
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Header Section */}
+      <div className="mb-8">
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${statusColors[proposal.status]}`}>
+            {statusLabels[proposal.status]}
+          </span>
+          <span className="text-gray-400 text-sm">Proposal #{proposal.id.substring(0, 8)}</span>
+        </div>
+        <h1 className="text-3xl sm:text-4xl font-black text-gray-900 dark:text-white mb-4 leading-tight">
+          {metadata?.title || "Untitled Proposal"}
+        </h1>
+        <div className="flex flex-wrap items-center gap-6 text-sm text-gray-500 dark:text-gray-400">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex-shrink-0" />
+            <span className="font-medium text-gray-700 dark:text-gray-300">
+              {proposal.proposer.substring(0, 6)}...{proposal.proposer.substring(proposal.proposer.length - 4)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            <span>Ends at ledger {proposal.endLedger}</span>
+          </div>
+          <a 
+            href={proposal.uri} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-blue-600 hover:text-blue-700 font-medium transition-colors"
+          >
+            View Source <ExternalLink className="w-3.5 h-3.5" />
+          </a>
         </div>
       </div>
 
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-        {proposal.description}
-      </h1>
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Left Column: Description & Votes */}
+        <div className="lg:col-span-2 space-y-8">
+          {/* Status Specific Alerts */}
+          {proposal.status === ProposalState.Active && (
+            <div className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-800 rounded-2xl p-6 flex gap-4">
+              <div className="w-10 h-10 rounded-xl bg-green-100 dark:bg-green-800 flex items-center justify-center shrink-0">
+                <Clock className="w-5 h-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-green-900 dark:text-green-100 mb-1">Voting is Open</h3>
+                <div className="flex items-center gap-2">
+                  <CountdownTimer 
+                    label="Ends in" 
+                    targetLedger={proposal.endLedger} 
+                    className="text-green-700 dark:text-green-300 text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
-      <p className="text-sm text-gray-500 mb-6">
-        Proposed by <span className="font-mono">{proposal.proposer}</span>
-      </p>
+          {proposal.status === ProposalState.Queued && (
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-2xl p-6 flex gap-4">
+              <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-800 flex items-center justify-center shrink-0">
+                <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-bold text-blue-900 dark:text-blue-100 mb-1">
+                  Proposal Queued in Timelock
+                </h3>
+                <p className="text-xs text-blue-700 dark:text-blue-300 mb-4">
+                  The voting period has ended and the proposal is waiting in the timelock for execution.
+                </p>
 
-      {/* Veto Window Status - shown when proposal is Queued */}
-      {proposal.state === ProposalState.Queued && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></div>
-            <div>
-              <p className="text-sm font-semibold text-blue-900">
-                Veto Window Open
-              </p>
-              <p className="text-xs text-blue-700 mt-1">
-                The guardian can cancel this proposal during the veto window before execution becomes possible.
-              </p>
+                {timelockInfo ? (
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white/50 dark:bg-blue-900/30 rounded-lg border border-blue-100 dark:border-blue-800">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-3.5 h-3.5 text-blue-500" />
+                        <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">Veto Window</span>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <CountdownTimer 
+                          label="Closes in" 
+                          targetLedger={timelockInfo.vetoWindowEndLedger} 
+                        />
+                        <span className="text-[10px] text-blue-600/70 dark:text-blue-400/70 font-mono">
+                          until ledger {timelockInfo.vetoWindowEndLedger}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white/50 dark:bg-blue-900/30 rounded-lg border border-blue-100 dark:border-blue-800">
+                      <div className="flex items-center gap-2">
+                        <Zap className="w-3.5 h-3.5 text-amber-500" />
+                        <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">Execution Readiness</span>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <CountdownTimer 
+                          label="Executable in" 
+                          targetLedger={timelockInfo.executableAtLedger} 
+                        />
+                        <span className="text-[10px] text-blue-600/70 dark:text-blue-400/70 font-mono">
+                          after ledger {timelockInfo.executableAtLedger}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white/50 dark:bg-blue-900/30 rounded-lg border border-blue-100 dark:border-blue-800">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                        <span className="text-xs font-semibold text-blue-800 dark:text-blue-200">Execution Deadline</span>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <CountdownTimer 
+                          label="Expires in" 
+                          targetLedger={timelockInfo.executionDeadlineLedger} 
+                        />
+                        <span className="text-[10px] text-blue-600/70 dark:text-blue-400/70 font-mono">
+                          before ledger {timelockInfo.executionDeadlineLedger}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-blue-600 animate-pulse py-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-xs font-medium">Calculating timelock details...</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* Hash Mismatch Warning */}
       {hashMismatched && (
@@ -317,319 +349,209 @@ export default function ProposalDetailPage({ params }: Props) {
           <div className="text-blue-700">
             <p className="font-semibold text-blue-800">Metadata Unreachable</p>
             <p className="mt-0.5">Could not load the full description. Check the URI directly below.</p>
-            <p className="mt-2 font-mono text-[11px] text-gray-500">Hash: {proposal.descriptionHash}</p>
+            <a 
+              href={proposal.uri} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 mt-2 font-mono text-[11px] bg-white/50 px-2 py-1 rounded border border-blue-100"
+            >
+              {proposal.uri.substring(0, 50)}... <ExternalLink className="w-3 h-3" />
+            </a>
           </div>
         </div>
       )}
 
-      {/* Metadata / Description Section */}
-      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-            Description
-          </h2>
-          {proposal.metadataUri && (
-            <a
-              href={proposal.metadataUri.startsWith('ipfs://')
-                ? `https://ipfs.io/ipfs/${proposal.metadataUri.replace('ipfs://', '')}`
-                : proposal.metadataUri}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-indigo-600 flex items-center gap-1 text-xs hover:underline"
-            >
-              View Source <ExternalLink className="w-3 h-3" />
-            </a>
-          )}
-        </div>
-
-        {metadataLoading ? (
-          <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
-            <Loader2 className="w-4 h-4 animate-spin" /> Fetching off-chain content...
-          </div>
-        ) : metadata ? (
-          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
-            {metadata}
-          </div>
-        ) : (
-          <p className="text-gray-400 italic py-4">
-            {fetchError ? "Content unavailable" : proposal.description}
-          </p>
-        )}
-      </div>
-
-      {/* Delegation */}
-      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-1">
-              Your Voting Power
-            </h2>
-            <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold text-gray-900 dark:text-white font-mono">
-                {delegationLoading ? "..." : (Number(votingPower) / 10 ** 7).toLocaleString()}
-              </span>
-              <span className="text-sm text-gray-400">NEB</span>
-            </div>
-          </div>
-          <button
-            onClick={() => setDelegateModalOpen(true)}
-            className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-          >
-            Delegate
-          </button>
-        </div>
-      </div>
-
-      {/* Vote bars */}
-      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-            Current Votes
-          </h2>
-          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-            voteType === VoteType.Quadratic
-              ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
-              : voteType === VoteType.Extended
-              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-              : "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300"
-          }`}>
-            {voteType}
-          </span>
-        </div>
-
-        <div className="h-48 w-full mt-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={chartData}
-              layout="vertical"
-              margin={{ left: -20, right: 20, top: 0, bottom: 0 }}
-            >
-              <XAxis type="number" hide />
-              <YAxis
-                type="category"
-                dataKey="name"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 12, fontWeight: 500, fill: isDark ? '#94a3b8' : '#64748b' }}
-              />
-               <Tooltip
-                cursor={{ fill: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.02)' }}
-                contentStyle={{ 
-                  borderRadius: '12px', 
-                  border: 'none', 
-                  boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
-                  backgroundColor: isDark ? '#1f2937' : '#ffffff',
-                  color: isDark ? '#f3f4f6' : '#111827'
-                }}
-                itemStyle={{ color: isDark ? '#f3f4f6' : '#111827' }}
-              />
-              <Bar
-                dataKey="votes"
-                radius={[0, 4, 4, 0]}
-                animationDuration={800}
-                barSize={28}
-              >
-                {chartData.map((entry) => (
-                  <Cell key={entry.name} fill={COLORS[entry.name]} />
-                ))}
-              </Bar>
-              {proposal.quorum && (
-                <ReferenceLine
-                  x={Number(proposal.quorum)}
-                  stroke="#ef4444"
-                  strokeDasharray="3 3"
-                  label={{ position: 'top', value: 'Quorum', fill: '#ef4444', fontSize: 10 }}
-                />
-              )}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="grid grid-cols-3 gap-4 border-t border-gray-100 dark:border-gray-700 pt-6">
-          <div>
-            <p className="text-xs text-gray-400 font-medium mb-1 uppercase">For</p>
-            <p className="font-mono text-lg font-bold text-emerald-600">{(Number(proposal.votesFor) / 10 ** 7).toLocaleString()}</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 font-medium mb-1 uppercase">Against</p>
-            <p className="font-mono text-lg font-bold text-rose-600">{(Number(proposal.votesAgainst) / 10 ** 7).toLocaleString()}</p>
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 font-medium mb-1 uppercase">Abstain</p>
-            <p className="font-mono text-lg font-bold text-slate-500 dark:text-slate-400">{(Number(proposal.votesAbstain) / 10 ** 7).toLocaleString()}</p>
+      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl shadow-sm overflow-hidden">
+        <div className="p-8">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Description</h2>
+          <div className="prose prose-blue dark:prose-invert max-w-none">
+            {metadata?.description ? (
+              <div dangerouslySetInnerHTML={{ __html: metadata.description.replace(/\n/g, '<br/>') }} />
+            ) : (
+              <p className="text-gray-400 italic">No description provided.</p>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Voting UI */}
-      {proposal.state === ProposalState.Active && !voted && (
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-4">
-            Cast Your Vote
-          </h2>
-
-          {!isConnected ? (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
-              <p className="text-gray-600 text-sm mb-3">Connect your wallet to participate in governance.</p>
-              <button
-                onClick={() => useWallet().connect()}
-                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
-              >
-                Connect Wallet to Vote
-              </button>
+      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl shadow-sm overflow-hidden">
+        <div className="p-8">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-8">Recent Votes</h2>
+          {votes.length > 0 ? (
+            <div className="space-y-4">
+              {votes.map((vote, i) => (
+                <div key={i} className="flex items-center justify-between p-4 rounded-2xl bg-gray-50 dark:bg-gray-800/50">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center text-[10px] font-bold">
+                      {vote.voter.substring(0, 2)}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                        {vote.voter.substring(0, 6)}...{vote.voter.substring(vote.voter.length - 4)}
+                      </p>
+                      <p className="text-[10px] text-gray-500">{new Date(vote.timestamp).toLocaleString()}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-gray-900 dark:text-white">
+                        {(Number(vote.amount) / 10**7).toLocaleString()} VOTES
+                      </p>
+                      <span className={`text-[10px] font-bold uppercase ${
+                        vote.support === VoteSupport.For ? "text-green-600" :
+                        vote.support === VoteSupport.Against ? "text-red-600" : "text-gray-500"
+                      }`}>
+                        {vote.support === VoteSupport.For ? "For" :
+                         vote.support === VoteSupport.Against ? "Against" : "Abstain"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
-            <>
-              <div className="flex flex-col sm:flex-row gap-3 mb-4">
-                {[
-                  { label: "For", value: VoteSupport.For, aria: "Vote For" },
-                  { label: "Against", value: VoteSupport.Against, aria: "Vote Against" },
-                  { label: "Abstain", value: VoteSupport.Abstain, aria: "Vote Abstain" },
-                ].map(({ label, value, aria }) => (
-                  <button
-                    key={label}
-                    onClick={() => setSelectedSupport(value)}
-                    disabled={isVoting}
-                    aria-label={aria}
-                    className={`flex-1 py-3 rounded-lg border-2 font-medium transition-all
-                      ${selectedSupport === value
-                        ? "border-indigo-600 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
-                        : "border-gray-100 dark:border-gray-700 hover:border-gray-200 dark:hover:border-gray-600 text-gray-600 dark:text-gray-400"}
-                      ${isVoting ? "opacity-50 cursor-not-allowed" : ""}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {voteError && (
-                <div role="alert" className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex gap-2 items-start">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  {voteError}
-                </div>
-              )}
-
-              <button
-                onClick={handleCastVote}
-                disabled={selectedSupport === null || isVoting}
-                aria-busy={isVoting}
-                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-              >
-                {isVoting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Submitting Vote...
-                  </>
-                ) : (
-                  "Submit Vote"
-                )}
-              </button>
-            </>
+            <div className="text-center py-12">
+              <p className="text-gray-400">No votes recorded yet.</p>
+            </div>
           )}
         </div>
-      )}
-
-      {voted && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center" aria-live="polite">
-          <p className="text-emerald-800 font-medium">
-            Your vote {votedSupport !== null ? `(${VoteSupport[votedSupport]})` : ""} has been recorded!
-          </p>
-        </div>
-      )}
-
-      {/* Votes List with Pagination */}
-      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mt-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide">
-            Votes
-          </h2>
-          <span className="text-xs text-gray-400">
-            Showing {votes.length} of {votesTotal} votes
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-xs text-gray-500">Sort by:</span>
-          <button
-            onClick={() => { setVotesSort("newest"); setVotesPage(0); }}
-            className={`px-2 py-1 text-xs rounded ${votesSort === "newest" ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-700"}`}
-          >
-            Newest
-          </button>
-          <button
-            onClick={() => { setVotesSort("weight"); setVotesPage(0); }}
-            className={`px-2 py-1 text-xs rounded ${votesSort === "weight" ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-700"}`}
-          >
-            Weight
-          </button>
-          <button
-            onClick={() => { setVotesSort("address"); setVotesPage(0); }}
-            className={`px-2 py-1 text-xs rounded ${votesSort === "address" ? "bg-indigo-600 text-white" : "bg-gray-100 dark:bg-gray-700"}`}
-          >
-            Address
-          </button>
-        </div>
-
-        {votesLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
-          </div>
-        ) : votes.length === 0 ? (
-          <p className="text-gray-400 text-sm py-8 text-center">No votes yet</p>
-        ) : (
-          <ul className="space-y-2">
-            {votes.map((vote) => (
-              <li
-                key={vote.id}
-                className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-sm">{vote.voter.slice(0, 6)}...{vote.voter.slice(-4)}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded ${
-                    vote.support === 1 ? "bg-green-100 text-green-700" :
-                    vote.support === 2 ? "bg-red-100 text-red-700" :
-                    "bg-gray-200 text-gray-600"
-                  }`}>
-                    {vote.support === 1 ? "For" : vote.support === 2 ? "Against" : "Abstain"}
-                  </span>
-                </div>
-                <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
-                  {(Number(vote.weight) / 10 ** 7).toLocaleString()} NEB
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {votesHasMore && (
-          <button
-            onClick={loadMoreVotes}
-            disabled={votesLoading}
-            className="w-full mt-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {votesLoading ? "Loading..." : "Load more"}
-          </button>
-        )}
       </div>
-
-      <DelegateModal
-        isOpen={delegateModalOpen}
-        onClose={() => setDelegateModalOpen(false)}
-        onSuccess={refreshDelegation}
-      />
-      <VotingModal
-        open={voteModalOpen}
-        onClose={() => setVoteModalOpen(false)}
-        proposalId={proposalId}
-        preselectedSupport={selectedSupport}
-        votingPower={votingPower}
-        voteType={voteType}
-        onVoted={() => {
-          setVoted(true);
-          loadProposal();
-        }}
-        governorClient={governorClient}
-      />
     </div>
-  );
+
+    {/* Right Column: Voting & Info */}
+    <div className="space-y-8">
+      {/* Voting Card */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-3xl shadow-xl shadow-blue-500/5 overflow-hidden sticky top-8">
+        <div className="p-8">
+          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-8">Cast Your Vote</h2>
+          
+          <div className="h-64 mb-8">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={voteData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={80}
+                  paddingAngle={5}
+                  dataKey="value"
+                >
+                  {voteData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="space-y-4 mb-8">
+            {voteData.map((v) => (
+              <div key={v.name} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: v.color }} />
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">{v.name}</span>
+                </div>
+                <span className="text-sm font-bold text-gray-900 dark:text-white">
+                  {(v.value / 10**7).toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {proposal.status === ProposalState.Active && (
+            <div className="space-y-3">
+              <button 
+                onClick={() => {
+                  setSelectedVoteType(VoteType.For);
+                  setShowVotingModal(true);
+                }}
+                className="w-full py-4 bg-green-600 text-white rounded-2xl font-bold hover:bg-green-700 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-green-600/20"
+              >
+                Vote For
+              </button>
+              <button 
+                onClick={() => {
+                  setSelectedVoteType(VoteType.Against);
+                  setShowVotingModal(true);
+                }}
+                className="w-full py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-red-600/20"
+              >
+                Vote Against
+              </button>
+              <button 
+                onClick={() => {
+                  setSelectedVoteType(VoteType.Abstain);
+                  setShowVotingModal(true);
+                }}
+                className="w-full py-4 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 rounded-2xl font-bold hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
+              >
+                Abstain
+              </button>
+            </div>
+          )}
+
+          {proposal.status === ProposalState.Pending && (
+            <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl">
+              <p className="text-sm text-gray-500 font-medium">Voting has not started yet.</p>
+              <p className="text-xs text-gray-400 mt-1">Starts at ledger {proposal.startLedger}</p>
+            </div>
+          )}
+
+          {proposal.status !== ProposalState.Active && proposal.status !== ProposalState.Pending && (
+            <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl">
+              <p className="text-sm text-gray-500 font-medium">Voting is closed for this proposal.</p>
+            </div>
+          )}
+        </div>
+        
+        <div className="border-t border-gray-100 dark:border-gray-800 p-8 bg-gray-50/50 dark:bg-gray-800/30">
+          <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-4">Governance Details</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500">Quorum</span>
+              <span className="font-semibold text-gray-700 dark:text-gray-300">
+                {governorSettings ? (Number(governorSettings.quorum) / 10**7).toLocaleString() : "..."} VOTES
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500">Threshold</span>
+              <span className="font-semibold text-gray-700 dark:text-gray-300">
+                {governorSettings ? (Number(governorSettings.countingType) === 0 ? "Single Majority" : "Super Majority") : "..."}
+              </span>
+            </div>
+          </div>
+          
+          <button 
+            onClick={() => setShowDelegateModal(true)}
+            className="w-full mt-6 py-3 border-2 border-blue-600 text-blue-600 dark:text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+          >
+            Delegate Your Voting Power
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <DelegateModal 
+    isOpen={showDelegateModal} 
+    onClose={() => setShowDelegateModal(false)} 
+  />
+
+  {proposal && selectedVoteType !== null && (
+    <VotingModal
+      isOpen={showVotingModal}
+      onClose={() => {
+        setShowVotingModal(false);
+        setSelectedVoteType(null);
+      }}
+      proposalId={proposal.id}
+      voteType={selectedVoteType}
+      proposalTitle={metadata?.title || "Untitled Proposal"}
+      onSuccess={loadProposal}
+    />
+  )}
+</div>
+);
 }
