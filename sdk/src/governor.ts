@@ -952,6 +952,34 @@ export class GovernorClient {
   }
 
   /**
+   * Poll for a proposal to reach a specific state.
+   * @param proposalId The proposal ID to monitor
+   * @param targetState The state to wait for
+   * @param options Polling options
+   * @returns Promise that resolves when the target state is reached
+   */
+  async waitForProposalState(
+    proposalId: bigint,
+    targetState: ProposalState,
+    options: { timeoutMs?: number; pollIntervalMs?: number } = {}
+  ): Promise<void> {
+    const { timeoutMs = 300000, pollIntervalMs = 5000 } = options; // 5 min default timeout, 5 sec poll
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      const currentState = await this.getProposalState(proposalId);
+      if (currentState === targetState) {
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    }
+
+    throw new Error(
+      `Timeout waiting for proposal ${proposalId} to reach state ${ProposalState[targetState]}`
+    );
+  }
+
+  /**
    * Get vote breakdown for a proposal.
    */
   async getProposalVotes(proposalId: bigint): Promise<ProposalVotes> {

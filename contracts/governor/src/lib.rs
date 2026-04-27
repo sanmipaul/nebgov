@@ -1275,6 +1275,14 @@ impl GovernorContract {
         )
     }
 
+    /// Get a proposal by ID.
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .expect("proposal not found")
+    }
+
     /// Get governor configuration.
     pub fn voting_delay(env: Env) -> u32 {
         env.storage()
