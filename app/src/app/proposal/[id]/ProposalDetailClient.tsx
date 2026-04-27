@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { VoteSupport, ProposalState, VotesClient, GovernorClient, VoteType, type GovernorSettings, type Network } from "@nebgov/sdk";
-import { AlertTriangle, Info, ExternalLink, Loader2, ChevronUp, ChevronDown } from "lucide-react";
+import { AlertTriangle, Info, ExternalLink, Loader2, MessageSquare } from "lucide-react";
 import { useWallet } from "../../../lib/wallet-context";
 import { DelegateModal } from "../../../components/DelegateModal";
 import { VotingModal } from "../../../components/VotingModal";
@@ -36,6 +36,11 @@ function supportLabel(support: number): string {
   if (support === VoteSupport.For) return "For";
   if (support === VoteSupport.Against) return "Against";
   return "Abstain";
+}
+
+function reasonPreview(reason: string, expanded: boolean): string {
+  if (expanded || reason.length <= 200) return reason;
+  return `${reason.slice(0, 200)}...`;
 }
 
 // Initial state for proposal to avoid undefined errors during loading
@@ -83,6 +88,7 @@ export default function ProposalDetailClient({ params }: Props) {
   const [votesHasMore, setVotesHasMore] = useState(false);
   const [votesSort, setVotesSort] = useState<"newest" | "weight" | "address">("newest");
   const [exportingCsv, setExportingCsv] = useState(false);
+  const [expandedReasons, setExpandedReasons] = useState<Record<number, boolean>>({});
 
   const loadVotes = useCallback(async (pageNum: number, append = false) => {
     setVotesLoading(true);
@@ -674,26 +680,74 @@ export default function ProposalDetailClient({ params }: Props) {
           <p className="text-gray-400 text-sm py-8 text-center">No votes yet</p>
         ) : (
           <ul className="space-y-2">
-            {votes.map((vote) => (
+            {votes.map((vote) => {
+              const reason = vote.reason?.trim() ?? "";
+              const hasReason = reason.length > 0;
+              const expanded = Boolean(expandedReasons[vote.id]);
+              const reasonText = reasonPreview(reason, expanded);
+              return (
               <li
                 key={vote.id}
-                className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg"
+                className="group p-3 bg-gray-50 dark:bg-gray-900 rounded-lg"
               >
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-sm">{vote.voter.slice(0, 6)}...{vote.voter.slice(-4)}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded ${
-                    vote.support === VoteSupport.For ? "bg-green-100 text-green-700" :
-                    vote.support === VoteSupport.Against ? "bg-red-100 text-red-700" :
-                    "bg-gray-200 text-gray-600"
-                  }`}>
-                    {supportLabel(vote.support)}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-sm">{vote.voter.slice(0, 6)}...{vote.voter.slice(-4)}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded ${
+                      vote.support === VoteSupport.For ? "bg-green-100 text-green-700" :
+                      vote.support === VoteSupport.Against ? "bg-red-100 text-red-700" :
+                      "bg-gray-200 text-gray-600"
+                    }`}>
+                      {supportLabel(vote.support)}
+                    </span>
+                    {hasReason && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedReasons((prev) => ({
+                            ...prev,
+                            [vote.id]: !prev[vote.id],
+                          }))
+                        }
+                        className="inline-flex items-center gap-1 rounded-full border border-indigo-200 px-2 py-0.5 text-[11px] text-indigo-700 hover:bg-indigo-50"
+                        aria-label={`Toggle vote reason for ${vote.voter}`}
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        Reason
+                      </button>
+                    )}
+                  </div>
+                  <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
+                    {(Number(vote.weight) / 10 ** 7).toLocaleString()} NEB
                   </span>
                 </div>
-                <span className="text-sm font-mono text-gray-600 dark:text-gray-400">
-                  {(Number(vote.weight) / 10 ** 7).toLocaleString()} NEB
-                </span>
+
+                {hasReason && (
+                  <div
+                    className={`mt-3 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 ${
+                      expanded ? "block" : "hidden md:group-hover:block"
+                    }`}
+                  >
+                    <p className="whitespace-pre-wrap break-words">{reasonText}</p>
+                    {reason.length > 200 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedReasons((prev) => ({
+                            ...prev,
+                            [vote.id]: !prev[vote.id],
+                          }))
+                        }
+                        className="mt-2 text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                      >
+                        {expanded ? "Show less" : "Show more"}
+                      </button>
+                    )}
+                  </div>
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
 

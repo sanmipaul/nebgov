@@ -22,6 +22,7 @@ describe("Competitions API", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.ADMIN_SECRET = "test-admin-secret";
     app = createApp();
   });
 
@@ -395,6 +396,211 @@ describe("Competitions API", () => {
         .expect(400);
 
       expect(response.body).toHaveProperty("errors");
+    });
+  });
+
+  describe("Admin competition routes", () => {
+    const adminHeader = { ADMIN_SECRET: "test-admin-secret" };
+
+    it("blocks create competition without admin secret", async () => {
+      await request(app)
+        .post("/competitions")
+        .send({
+          name: "Q2 Governance Sprint",
+          description: "desc",
+          entry_fee: 1000,
+          start_date: "2030-07-01T00:00:00.000Z",
+          end_date: "2030-07-31T00:00:00.000Z",
+        })
+        .expect(403);
+    });
+
+    it("creates a competition with admin secret", async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{
+          id: 7,
+          name: "Q2 Governance Sprint",
+          description: "desc",
+          entry_fee: "1000",
+          start_date: "2030-07-01T00:00:00.000Z",
+          end_date: "2030-07-31T00:00:00.000Z",
+          is_active: true,
+          created_by: null,
+        }],
+        command: "",
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+      });
+
+      const response = await request(app)
+        .post("/competitions")
+        .set(adminHeader)
+        .send({
+          name: "Q2 Governance Sprint",
+          description: "desc",
+          entry_fee: 1000,
+          start_date: "2030-07-01T00:00:00.000Z",
+          end_date: "2030-07-31T00:00:00.000Z",
+        })
+        .expect(201);
+
+      expect(response.body).toHaveProperty("competition");
+      expect(response.body.competition.name).toBe("Q2 Governance Sprint");
+    });
+
+    it("rejects create when end_date is not in the future", async () => {
+      const response = await request(app)
+        .post("/competitions")
+        .set(adminHeader)
+        .send({
+          name: "Old Competition",
+          description: "desc",
+          entry_fee: 1000,
+          start_date: "2020-01-01T00:00:00.000Z",
+          end_date: "2020-01-02T00:00:00.000Z",
+        })
+        .expect(400);
+
+      expect(response.body).toHaveProperty("errors");
+    });
+
+    it("updates a competition before start_date", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 7,
+            name: "Existing",
+            description: "desc",
+            entry_fee: "1000",
+            start_date: "2030-07-01T00:00:00.000Z",
+            end_date: "2030-07-31T00:00:00.000Z",
+            is_active: true,
+            created_by: null,
+          }],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        })
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 7,
+            name: "Updated Name",
+            description: "desc",
+            entry_fee: "2000",
+            start_date: "2030-07-01T00:00:00.000Z",
+            end_date: "2030-08-15T00:00:00.000Z",
+            is_active: true,
+            created_by: null,
+          }],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        });
+
+      const response = await request(app)
+        .put("/competitions/7")
+        .set(adminHeader)
+        .send({
+          name: "Updated Name",
+          entry_fee: 2000,
+          end_date: "2030-08-15T00:00:00.000Z",
+        })
+        .expect(200);
+
+      expect(response.body.competition.name).toBe("Updated Name");
+    });
+
+    it("rejects update after competition start_date", async () => {
+      mockQuery.mockResolvedValueOnce({
+        rows: [{
+          id: 8,
+          name: "Started Competition",
+          description: "desc",
+          entry_fee: "1000",
+          start_date: "2020-01-01T00:00:00.000Z",
+          end_date: "2030-01-01T00:00:00.000Z",
+          is_active: true,
+          created_by: null,
+        }],
+        command: "",
+        rowCount: 1,
+        oid: 0,
+        fields: [],
+      });
+
+      const response = await request(app)
+        .put("/competitions/8")
+        .set(adminHeader)
+        .send({ name: "Too Late" })
+        .expect(400);
+
+      expect(response.body.error).toContain("before start_date");
+    });
+
+    it("soft deletes a competition without participants", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 9,
+            name: "To Delete",
+            start_date: "2030-07-01T00:00:00.000Z",
+          }],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ count: "0" }],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        })
+        .mockResolvedValueOnce({
+          rows: [],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        });
+
+      await request(app)
+        .delete("/competitions/9")
+        .set(adminHeader)
+        .expect(204);
+    });
+
+    it("rejects soft delete when participants exist", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{
+            id: 10,
+            name: "Has Participants",
+            start_date: "2030-07-01T00:00:00.000Z",
+          }],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ count: "3" }],
+          command: "",
+          rowCount: 1,
+          oid: 0,
+          fields: [],
+        });
+
+      const response = await request(app)
+        .delete("/competitions/10")
+        .set(adminHeader)
+        .expect(400);
+
+      expect(response.body.error).toContain("existing participants");
     });
   });
 });

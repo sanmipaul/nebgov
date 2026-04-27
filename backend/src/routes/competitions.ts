@@ -3,6 +3,7 @@ import { z } from "zod";
 import pool from "../db/pool";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { validate } from "../middleware/validate";
+import { isAdmin } from "../middleware/admin";
 import { Competition } from "../entities/Competition";
 import { CompetitionParticipant } from "../entities/CompetitionParticipant";
 
@@ -32,6 +33,68 @@ const listParticipantsSchema = z.object({
 const competitionIdSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
+
+const createCompetitionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100),
+    description: z.string().max(5000).optional(),
+    entry_fee: z.coerce.number().int().min(0),
+    start_date: z.string().datetime(),
+    end_date: z.string().datetime(),
+  })
+  .superRefine((data, ctx) => {
+    const start = new Date(data.start_date);
+    const end = new Date(data.end_date);
+    const now = Date.now();
+
+    if (start.getTime() >= end.getTime()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["start_date"],
+        message: "start_date must be before end_date",
+      });
+    }
+
+    if (end.getTime() <= now) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end_date"],
+        message: "end_date must be in the future",
+      });
+    }
+  });
+
+const updateCompetitionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    description: z.string().max(5000).optional(),
+    entry_fee: z.coerce.number().int().min(0).optional(),
+    start_date: z.string().datetime().optional(),
+    end_date: z.string().datetime().optional(),
+    is_active: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [],
+        message: "At least one field must be provided",
+      });
+      return;
+    }
+
+    if (data.start_date && data.end_date) {
+      const start = new Date(data.start_date);
+      const end = new Date(data.end_date);
+      if (start.getTime() >= end.getTime()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["start_date"],
+          message: "start_date must be before end_date",
+        });
+      }
+    }
+  });
 
 // GET /competitions - List all competitions with pagination
 router.get(
@@ -318,6 +381,133 @@ router.delete(
       res.status(500).json({ error: "Failed to leave competition" });
     } finally {
       client.release();
+    }
+  },
+);
+
+// POST /competitions - Create competition (admin only)
+router.post(
+  "/",
+  isAdmin,
+  validate({ body: createCompetitionSchema }),
+  async (req, res) => {
+    const { name, description, entry_fee, start_date, end_date } = req.body as z.infer<
+      typeof createCompetitionSchema
+    >;
+
+    try {
+      const result = await pool.query<Competition>(
+        `INSERT INTO competitions (name, description, entry_fee, start_date, end_date, is_active, created_by)
+         VALUES ($1, $2, $3, $4, $5, true, NULL)
+         RETURNING *`,
+        [name, description ?? null, entry_fee, new Date(start_date), new Date(end_date)],
+      );
+
+      return res.status(201).json({ competition: result.rows[0] });
+    } catch (error) {
+      console.error("Error creating competition:", error);
+      return res.status(500).json({ error: "Failed to create competition" });
+    }
+  },
+);
+
+// PUT /competitions/:id - Update competition (admin only)
+router.put(
+  "/:id",
+  isAdmin,
+  validate({ params: competitionIdSchema, body: updateCompetitionSchema }),
+  async (req, res) => {
+    const id = Number((req.params as Record<string, string>).id);
+    const updates = req.body as z.infer<typeof updateCompetitionSchema>;
+
+    try {
+      const existing = await pool.query<Competition>(
+        "SELECT * FROM competitions WHERE id = $1",
+        [id],
+      );
+
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: "Competition not found" });
+      }
+
+      const competition = existing.rows[0];
+      if (new Date() >= new Date(competition.start_date)) {
+        return res.status(400).json({
+          error: "Competition can only be updated before start_date",
+        });
+      }
+
+      const fields: string[] = [];
+      const values: unknown[] = [];
+      let idx = 1;
+      const append = (field: string, value: unknown) => {
+        fields.push(`${field} = $${idx}`);
+        values.push(value);
+        idx += 1;
+      };
+
+      if (updates.name !== undefined) append("name", updates.name);
+      if (updates.description !== undefined) append("description", updates.description);
+      if (updates.entry_fee !== undefined) append("entry_fee", updates.entry_fee);
+      if (updates.start_date !== undefined) append("start_date", new Date(updates.start_date));
+      if (updates.end_date !== undefined) append("end_date", new Date(updates.end_date));
+      if (updates.is_active !== undefined) append("is_active", updates.is_active);
+      append("updated_at", new Date());
+
+      const result = await pool.query<Competition>(
+        `UPDATE competitions
+         SET ${fields.join(", ")}
+         WHERE id = $${idx}
+         RETURNING *`,
+        [...values, id],
+      );
+
+      return res.status(200).json({ competition: result.rows[0] });
+    } catch (error) {
+      console.error("Error updating competition:", error);
+      return res.status(500).json({ error: "Failed to update competition" });
+    }
+  },
+);
+
+// DELETE /competitions/:id - Soft delete competition (admin only)
+router.delete(
+  "/:id",
+  isAdmin,
+  validate({ params: competitionIdSchema }),
+  async (req, res) => {
+    const id = Number((req.params as Record<string, string>).id);
+
+    try {
+      const existing = await pool.query<Competition>(
+        "SELECT * FROM competitions WHERE id = $1",
+        [id],
+      );
+
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: "Competition not found" });
+      }
+
+      const participantCount = await pool.query<{ count: string }>(
+        "SELECT COUNT(*)::text AS count FROM competition_participants WHERE competition_id = $1",
+        [id],
+      );
+
+      if (Number(participantCount.rows[0]?.count ?? "0") > 0) {
+        return res.status(400).json({
+          error: "Cannot delete competition with existing participants",
+        });
+      }
+
+      await pool.query(
+        "UPDATE competitions SET is_active = false, updated_at = NOW() WHERE id = $1",
+        [id],
+      );
+
+      return res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting competition:", error);
+      return res.status(500).json({ error: "Failed to delete competition" });
     }
   },
 );

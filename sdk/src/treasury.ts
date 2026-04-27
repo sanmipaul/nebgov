@@ -11,6 +11,7 @@ import {
 } from "@stellar/stellar-sdk";
 import {
   TreasuryConfig,
+  TreasuryTx,
   BatchTransferRecipient,
   BatchTransferEvent,
   Network,
@@ -292,6 +293,157 @@ export class TreasuryClient {
       const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
         .result?.retval;
       return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
+  }
+
+  /**
+   * Get current treasury owner addresses from on-chain state.
+   */
+  async getOwners(): Promise<string[]> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("owners"))
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return [];
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return [];
+      const owners = scValToNative(raw) as unknown[];
+      return owners.map((owner) => String(owner));
+    });
+  }
+
+  /**
+   * Get treasury approval threshold from on-chain state.
+   */
+  async getThreshold(): Promise<number> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("threshold"))
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return 1;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return 1;
+      return Number(scValToNative(raw));
+    });
+  }
+
+  /**
+   * Check whether an address is currently a treasury owner.
+   */
+  async isOwner(address: string): Promise<boolean> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "is_treasury_owner",
+              nativeToScVal(address, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return false;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return false;
+      return Boolean(scValToNative(raw));
+    });
+  }
+
+  /**
+   * Get total number of treasury transactions.
+   */
+  async getTxCount(): Promise<bigint> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("tx_count"))
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return 0n;
+      return BigInt(scValToNative(raw) as number | bigint | string);
+    });
+  }
+
+  /**
+   * Get a treasury transaction by ID.
+   */
+  async getTx(txId: bigint): Promise<TreasuryTx> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call("get_tx", nativeToScVal(txId, { type: "u64" })),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new TreasuryError(
+          TreasuryErrorCode.InvalidArguments,
+          `Treasury transaction ${txId} not found`,
+        );
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) {
+        throw new TreasuryError(
+          TreasuryErrorCode.MissingReturnValue,
+          `No return value from get_tx(${txId})`,
+        );
+      }
+
+      const tx = scValToNative(raw) as {
+        id: bigint | number | string;
+        proposer: string;
+        target: string;
+        approvals: number | bigint | string;
+        executed: boolean;
+        cancelled: boolean;
+      };
+
+      return {
+        id: BigInt(tx.id),
+        proposer: tx.proposer,
+        target: tx.target,
+        approvals: Number(tx.approvals),
+        executed: Boolean(tx.executed),
+        cancelled: Boolean(tx.cancelled),
+      };
     });
   }
 

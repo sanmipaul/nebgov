@@ -112,6 +112,18 @@ export class TreasuryClient {
     return Number(scValToNative(rv));
   }
 
+  async getThreshold(viewer: string): Promise<number> {
+    return this.threshold(viewer);
+  }
+
+  /** Returns `null` when owners entrypoint cannot be simulated. */
+  async getOwners(viewer: string): Promise<string[] | null> {
+    const rv = await this.simulate(viewer, this.contract.call("owners"));
+    if (!rv) return null;
+    const owners = scValToNative(rv) as unknown[];
+    return owners.map((owner) => String(owner));
+  }
+
   async getTx(viewer: string, id: number): Promise<TreasuryTx | null> {
     const rv = await this.simulate(
       viewer,
@@ -171,6 +183,10 @@ export class TreasuryClient {
     );
     if (!rv) return null;
     return Boolean(scValToNative(rv));
+  }
+
+  async isOwner(viewer: string, candidate: string): Promise<boolean | null> {
+    return this.isTreasuryOwner(viewer, candidate);
   }
 
   async getSpendingCap(

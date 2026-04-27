@@ -1,5 +1,6 @@
 packages:
   - 'sdk'
   - 'app'
+  - 'packages/cli'
   - 'packages/indexer'
   - 'backend'

@@ -5,6 +5,7 @@ var mockGetAccount = jest.fn();
 var mockPrepareTransaction = jest.fn();
 var mockSendTransaction = jest.fn();
 var mockGetTransaction = jest.fn();
+var mockSimulateTransaction = jest.fn();
 
 import { TreasuryClient } from "../treasury";
 import { TreasuryError, TreasuryErrorCode, parseTreasuryError } from "../errors";
@@ -22,6 +23,7 @@ jest.mock("@stellar/stellar-sdk", () => {
         prepareTransaction: mockPrepareTransaction,
         sendTransaction: mockSendTransaction,
         getTransaction: mockGetTransaction,
+        simulateTransaction: mockSimulateTransaction,
       })),
       Api: {
         GetTransactionStatus: {
@@ -29,6 +31,7 @@ jest.mock("@stellar/stellar-sdk", () => {
           FAILED: "FAILED",
           NOT_FOUND: "NOT_FOUND",
         },
+        isSimulationError: jest.fn().mockReturnValue(false),
       },
     },
     Contract: jest.fn().mockImplementation((addr) => ({
@@ -57,10 +60,15 @@ describe("TreasuryClient", () => {
     jest.clearAllMocks();
     mockGetAccount.mockResolvedValue(new Account(validGAddr, "1"));
     mockNativeToScVal.mockReturnValue({} as xdr.ScVal);
+    mockSimulateTransaction.mockResolvedValue({
+      result: { retval: {} },
+    });
 
     client = new TreasuryClient({
       treasuryAddress: validCAddr,
       network: "testnet",
+      simulationAccount: validGAddr,
+      maxAttempts: 1,
     });
   });
 
@@ -226,16 +234,11 @@ describe("TreasuryClient", () => {
 
       await expect(
         client.submitWithLimit(mockKeypair, target, calldata, amount)
-      ).rejects.toThrow(TreasuryError);
-
-      try {
-        await client.submitWithLimit(mockKeypair, target, calldata, amount);
-      } catch (e) {
-        if (e instanceof TreasuryError) {
-          expect(e.code).toBe(TreasuryErrorCode.TransactionTimeout);
-        }
-      }
-    });
+      ).rejects.toMatchObject({
+        name: "TreasuryError",
+        code: TreasuryErrorCode.TransactionTimeout,
+      });
+    }, 60000);
 
     it("should handle immediate transaction failure", async () => {
       const target = validCAddr;
@@ -327,6 +330,68 @@ describe("TreasuryClient", () => {
       expect(mockNativeToScVal).toHaveBeenCalledWith(calldata, {
         type: "bytes",
       });
+    });
+  });
+
+  describe("read methods", () => {
+    it("getOwners() should decode owner addresses", async () => {
+      mockScValToNative.mockReturnValue([
+        "GA123OWNER1111111111111111111111111111111111111111111111111111",
+        "GB456OWNER2222222222222222222222222222222222222222222222222222",
+      ]);
+
+      const owners = await client.getOwners();
+
+      expect(Array.isArray(owners)).toBe(true);
+      expect(owners).toHaveLength(2);
+      expect(mockSimulateTransaction).toHaveBeenCalled();
+    });
+
+    it("getThreshold() should decode threshold number", async () => {
+      mockScValToNative.mockReturnValue(2);
+
+      const threshold = await client.getThreshold();
+
+      expect(threshold).toBe(2);
+    });
+
+    it("isOwner() should decode owner boolean", async () => {
+      mockScValToNative.mockReturnValue(true);
+
+      const result = await client.isOwner(validGAddr);
+
+      expect(result).toBe(true);
+      expect(mockNativeToScVal).toHaveBeenCalledWith(validGAddr, {
+        type: "address",
+      });
+    });
+
+    it("getTxCount() should decode tx count bigint", async () => {
+      mockScValToNative.mockReturnValue("17");
+
+      const count = await client.getTxCount();
+
+      expect(count).toBe(17n);
+    });
+
+    it("getTx() should decode treasury tx object", async () => {
+      mockScValToNative.mockReturnValue({
+        id: "9",
+        proposer: validGAddr,
+        target: validCAddr,
+        approvals: "2",
+        executed: false,
+        cancelled: false,
+      });
+
+      const tx = await client.getTx(9n);
+
+      expect(tx.id).toBe(9n);
+      expect(tx.proposer).toBe(validGAddr);
+      expect(tx.target).toBe(validCAddr);
+      expect(tx.approvals).toBe(2);
+      expect(tx.executed).toBe(false);
+      expect(tx.cancelled).toBe(false);
     });
   });
 });
