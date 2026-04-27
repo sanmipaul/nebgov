@@ -1122,7 +1122,7 @@ impl GovernorContract {
     ///
     /// After the voting period ends, the proposal is Succeeded when it has at
     /// least one For vote, more For votes than Against votes, and meets the
-    /// quorum requirement (votes_for >= quorum).
+    /// quorum requirement (votes_for + votes_abstain >= quorum).
     pub fn state(env: Env, proposal_id: u64) -> ProposalState {
         let proposal: Proposal = env
             .storage()
@@ -1153,7 +1153,7 @@ impl GovernorContract {
 
         // Voting ended.
         let quorum = Self::quorum(env.clone(), proposal_id);
-        let quorum_met = proposal.votes_for >= quorum;
+        let quorum_met = proposal.votes_for + proposal.votes_abstain >= quorum;
         let for_wins = proposal.votes_for > proposal.votes_against;
         let against_wins_or_ties = proposal.votes_against >= proposal.votes_for;
 
@@ -1261,6 +1261,16 @@ impl GovernorContract {
         Self::quorum(env, proposal_id)
     }
 
+    /// Check if a proposal has reached quorum.
+    ///
+    /// Returns true if the sum of for and abstain votes meets or exceeds the
+    /// required quorum for the proposal.
+    pub fn is_quorum_reached(env: Env, proposal_id: u64) -> bool {
+        let proposal = Self::must_get_proposal(&env, proposal_id);
+        let required = Self::quorum(env, proposal_id);
+        proposal.votes_for + proposal.votes_abstain >= required
+    }
+
     /// Get vote counts for a proposal.
     pub fn proposal_votes(env: Env, proposal_id: u64) -> (i128, i128, i128) {
         let proposal: Proposal = env
@@ -1273,14 +1283,6 @@ impl GovernorContract {
             proposal.votes_against,
             proposal.votes_abstain,
         )
-    }
-
-    /// Get a proposal by ID.
-    pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("proposal not found")
     }
 
     /// Get governor configuration.
@@ -2083,6 +2085,81 @@ mod test {
         // but start_ledger checkpoint may be 0 depending on delegation timing).
         // With 1000 votes For, the proposal succeeds regardless.
         assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
+    }
+
+    #[test]
+    fn test_is_quorum_reached() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let timelock = Address::generate(&env);
+        let proposer1 = Address::generate(&env);
+        let proposer2 = Address::generate(&env);
+        let proposer3 = Address::generate(&env);
+        let voter1 = Address::generate(&env);
+        let voter2 = Address::generate(&env);
+
+        // Deploy a real SEP-41 token and TokenVotes contract.
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_addr = sac.address();
+        let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+
+        let votes_id = env.register(sorogov_token_votes::TokenVotesContract, ());
+        let votes_client = sorogov_token_votes::TokenVotesContractClient::new(&env, &votes_id);
+        votes_client.initialize(&admin, &token_addr);
+
+        // Mint tokens: voter1 has 400, voter2 has 600, total 1000
+        sac_client.mint(&voter1, &400_i128);
+        sac_client.mint(&voter2, &600_i128);
+        votes_client.delegate(&voter1, &voter1);
+        votes_client.delegate(&voter2, &voter2);
+
+        // Initialize governor with 50% quorum (50 / 100 = 500 required).
+        let guardian = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &votes_id,
+            &timelock,
+            &0,
+            &100,
+            &50,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
+
+        // Case 1: Not enough votes for quorum (400 For < 500)
+        let proposal_id = propose_dummy(&env, &client, &proposer1);
+        env.ledger().with_mut(|li| li.sequence_number = 1);
+        client.cast_vote(&voter1, &proposal_id, &VoteSupport::For);
+        env.ledger().with_mut(|li| li.sequence_number = 1000);
+        assert!(!client.is_quorum_reached(&proposal_id));
+        assert_eq!(client.state(&proposal_id), ProposalState::Defeated);
+
+        // Case 2: Exactly at quorum threshold (0 For + 600 Abstain = 600 >= 500)
+        env.ledger().with_mut(|li| li.sequence_number = 101);
+        let proposal_id2 = propose_dummy(&env, &client, &proposer2);
+        env.ledger().with_mut(|li| li.sequence_number = 102);
+        client.cast_vote(&voter1, &proposal_id2, &VoteSupport::Against);
+        client.cast_vote(&voter2, &proposal_id2, &VoteSupport::Abstain);
+        env.ledger().with_mut(|li| li.sequence_number = 1000);
+        assert!(client.is_quorum_reached(&proposal_id2));
+        // But still defeated because For (0) <= Against (400)
+        assert_eq!(client.state(&proposal_id2), ProposalState::Defeated);
+
+        // Case 3: Above quorum (600 For > 500)
+        env.ledger().with_mut(|li| li.sequence_number = 202);
+        let proposal_id3 = propose_dummy(&env, &client, &proposer3);
+        env.ledger().with_mut(|li| li.sequence_number = 203);
+        client.cast_vote(&voter2, &proposal_id3, &VoteSupport::For);
+        env.ledger().with_mut(|li| li.sequence_number = 1000);
+        assert!(client.is_quorum_reached(&proposal_id3));
+        assert_eq!(client.state(&proposal_id3), ProposalState::Succeeded);
     }
 
     #[test]

@@ -114,7 +114,7 @@ export default function ProposalDetailClient({ params }: Props) {
     }
   };
 
-  const { publicKey, isConnected, signTransaction } = useWallet();
+  const { publicKey, isConnected, signTransaction, connect } = useWallet();
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const [shareUrl, setShareUrl] = useState<string>("");
@@ -554,15 +554,35 @@ export default function ProposalDetailClient({ params }: Props) {
             Cast Your Vote
           </h2>
 
-          {!isConnected ? (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
-              <p className="text-gray-600 text-sm mb-3">Connect your wallet to participate in governance.</p>
-              <button
-                onClick={() => useWallet().connect()}
-                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition-colors"
-              >
-                Connect Wallet to Vote
-              </button>
+              {!isConnected ? (
+            <div className="bg-indigo-50 dark:bg-slate-900/80 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-5 mb-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-base font-semibold text-slate-900 dark:text-white">
+                    Connect your wallet to vote on this proposal
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                    You'll need GOV tokens to participate.
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <button
+                    onClick={connect}
+                    className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700"
+                  >
+                    Connect Wallet
+                  </button>
+                  <a
+                    href="https://github.com/nebgov/nebgov/blob/main/docs/tutorial.md"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center rounded-lg border border-transparent bg-white px-4 py-2 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-50 dark:bg-slate-800 dark:text-indigo-200 dark:hover:bg-slate-700"
+                  >
+                    Learn about governance →
+                  </a>
+                </div>
+              </div>
             </div>
           ) : (
             <>

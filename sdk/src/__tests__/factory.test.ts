@@ -1,9 +1,12 @@
 var mockSimulate = jest.fn();
 var mockGetAccount = jest.fn();
+var mockPrepareTransaction = jest.fn();
+var mockSendTransaction = jest.fn();
+var mockGetTransaction = jest.fn();
 
 import { FactoryClient } from "../factory";
 import { xdr } from "@stellar/stellar-sdk";
-import type { FactoryConfig } from "../types";
+import type { FactoryConfig, VoteType } from "../types";
 
 jest.mock("@stellar/stellar-sdk", () => {
   const actual = jest.requireActual("@stellar/stellar-sdk");
@@ -14,6 +17,9 @@ jest.mock("@stellar/stellar-sdk", () => {
       Server: jest.fn().mockImplementation(() => ({
         simulateTransaction: mockSimulate,
         getAccount: mockGetAccount,
+        prepareTransaction: mockPrepareTransaction,
+        sendTransaction: mockSendTransaction,
+        getTransaction: mockGetTransaction,
       })),
       Api: {
         ...actual.SorobanRpc.Api,
@@ -50,6 +56,9 @@ describe("FactoryClient", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetAccount.mockResolvedValue({});
+    mockPrepareTransaction.mockResolvedValue({ sign: jest.fn() });
+    mockSendTransaction.mockResolvedValue({ hash: "HASH123" });
+    mockGetTransaction.mockResolvedValue({ status: SorobanRpc.Api.GetTransactionStatus.SUCCESS, returnValue: xdr.ScVal.scvU64(new xdr.Uint64(1n)) });
     SorobanRpc.Api.isSimulationError.mockReturnValue(false);
   });
 
@@ -87,13 +96,13 @@ describe("FactoryClient", () => {
     expect(mockSimulate).toHaveBeenCalledTimes(1);
   });
 
-  it("fetches all governors in pages of 20", async () => {
+  it("fetches all governors in pages of 50 when count exceeds 50", async () => {
     const responseCount = {
-      result: { retval: xdr.ScVal.scvU64(new xdr.Uint64(22n)) },
+      result: { retval: xdr.ScVal.scvU64(new xdr.Uint64(55n)) },
     };
     const responseEntry = { result: { retval: xdr.ScVal.scvMap([]) } };
     mockSimulate.mockResolvedValueOnce(responseCount);
-    for (let i = 0; i < 22; i += 1) {
+    for (let i = 0; i < 55; i += 1) {
       mockSimulate.mockResolvedValueOnce(responseEntry);
     }
 
@@ -101,13 +110,13 @@ describe("FactoryClient", () => {
       if (typeof raw === "object" && raw?.toString?.() === "ScVal") {
         return { id: 1n, governor: "G1", timelock: "T1", token: "TO1", deployer: "D1" };
       }
-      return 22n;
+      return 55n;
     });
 
     const client = new FactoryClient(config);
     const entries = await client.getAllGovernors();
 
-    expect(entries).toHaveLength(22);
+    expect(entries).toHaveLength(55);
     expect(entries[0]).toEqual({
       id: 1n,
       governor: "G1",
@@ -115,5 +124,64 @@ describe("FactoryClient", () => {
       token: "TO1",
       deployer: "D1",
     });
+  });
+
+  it("fetches a limited governor list with offset", async () => {
+    const responseCount = {
+      result: { retval: xdr.ScVal.scvU64(new xdr.Uint64(10n)) },
+    };
+    const responseEntry = { result: { retval: xdr.ScVal.scvMap([]) } };
+    mockSimulate.mockResolvedValueOnce(responseCount);
+    for (let i = 0; i < 3; i += 1) {
+      mockSimulate.mockResolvedValueOnce(responseEntry);
+    }
+
+    scValToNative.mockImplementation((raw: unknown) => {
+      if (typeof raw === "object" && raw?.toString?.() === "ScVal") {
+        return { id: 6n, governor: "G6", timelock: "T6", token: "TO6", deployer: "D6" };
+      }
+      return 10n;
+    });
+
+    const client = new FactoryClient(config);
+    const entries = await client.getAllGovernors({ limit: 3, offset: 5 });
+
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toEqual({
+      id: 6n,
+      governor: "G6",
+      timelock: "T6",
+      token: "TO6",
+      deployer: "D6",
+    });
+  });
+
+  it("deploys a new governor and returns the new id", async () => {
+    mockGetTransaction.mockResolvedValue({
+      status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,
+      returnValue: xdr.ScVal.scvU64(new xdr.Uint64(7n)),
+    });
+    scValToNative.mockReturnValue(7n);
+
+    const client = new FactoryClient(config);
+    const signer = {
+      publicKey: () => "GTESTSIGNER",
+    } as any;
+
+    const id = await client.deploy(signer, "GOV_TOKEN", {
+      votingDelay: 10,
+      votingPeriod: 100,
+      quorumNumerator: 20,
+      proposalThreshold: 1000n,
+      timelockDelay: 3600n,
+      guardian: "GGAURDIAN",
+      voteType: VoteType.Extended,
+      proposalGracePeriod: 120000,
+    });
+
+    expect(id).toBe(7n);
+    expect(mockPrepareTransaction).toHaveBeenCalledTimes(1);
+    expect(mockSendTransaction).toHaveBeenCalledTimes(1);
+    expect(mockGetTransaction).toHaveBeenCalledWith("HASH123");
   });
 });

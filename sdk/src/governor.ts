@@ -1044,8 +1044,36 @@ export class GovernorClient {
       .result?.retval;
     if (!raw) throw new Error("No return value");
 
-    const quorum = scValToNative(raw) as bigint;
-    return quorum;
+  /**
+   * Check if a proposal has reached quorum.
+   * Returns true if the sum of for and abstain votes meets or exceeds the required quorum.
+   */
+  async isQuorumReached(proposalId: bigint): Promise<boolean> {
+    const result = await this.server.simulateTransaction(
+      new TransactionBuilder(
+        await this.server.getAccount(this.config.governorAddress),
+        { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+      )
+        .addOperation(
+          this.contract.call(
+            "is_quorum_reached",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build(),
+    );
+
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new Error(`Simulation error: ${result.error}`);
+    }
+
+    const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+      .result?.retval;
+    if (!raw) throw new Error("No return value");
+
+    const isReached = scValToNative(raw) as boolean;
+    return isReached;
   }
 
   /**

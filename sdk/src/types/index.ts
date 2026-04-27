@@ -125,6 +125,17 @@ export interface GovernorEntry {
   deployer: string;
 }
 
+export interface DeploySettings {
+  votingDelay: number;
+  votingPeriod: number;
+  quorumNumerator: number;
+  proposalThreshold: bigint;
+  timelockDelay: bigint;
+  guardian: string;
+  voteType: VoteType;
+  proposalGracePeriod: number;
+}
+
 export interface FactoryConfig {
   factoryAddress: string;
   network: Network;
