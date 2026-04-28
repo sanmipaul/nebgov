@@ -1607,6 +1607,15 @@ export class GovernorClient {
   }
 
   /**
+   * Return the on-chain vote reason for a voter on a proposal.
+   * Empty string means no reason recorded.
+   */
+  async getVoteReason(proposalId: bigint, voter: string): Promise<string> {
+    const receipt = await this.getReceipt(proposalId, voter);
+    return receipt.reason ?? "";
+  }
+
+  /**
    * Validate settings before building or submitting an update_config proposal.
    */
   validateGovernorSettings(

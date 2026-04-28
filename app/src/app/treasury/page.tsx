@@ -65,6 +65,7 @@ export default function TreasuryPage() {
 
   const [txs, setTxs] = useState<TreasuryTx[]>([]);
   const [threshold, setThreshold] = useState<number>(1);
+  const [ownerAddresses, setOwnerAddresses] = useState<string[]>([]);
   const [alreadyApproved, setAlreadyApproved] = useState<Record<string, boolean>>(
     {},
   );
@@ -149,8 +150,11 @@ export default function TreasuryPage() {
     async (viewer: string) => {
       if (!treasuryClient || !viewer) return;
 
-      const t = await treasuryClient.threshold(viewer);
+      const t = await treasuryClient.getThreshold(viewer);
       setThreshold(t);
+
+      const owners = await treasuryClient.getOwners(viewer);
+      setOwnerAddresses(owners ?? []);
 
       const count = await treasuryClient.txCount(viewer);
       const scanLimit = count !== null && count > 0 ? count : 50;
@@ -186,8 +190,14 @@ export default function TreasuryPage() {
       setAlreadyApproved(approvedMap);
 
       if (publicKey) {
-        const own = await treasuryClient.isTreasuryOwner(viewer, publicKey);
-        setOwnerOnChain(own);
+        if (owners && owners.length > 0) {
+          setOwnerOnChain(
+            owners.some((owner) => owner.toUpperCase() === publicKey.toUpperCase()),
+          );
+        } else {
+          const own = await treasuryClient.isOwner(viewer, publicKey);
+          setOwnerOnChain(own);
+        }
       } else {
         setOwnerOnChain(null);
       }
@@ -230,6 +240,7 @@ export default function TreasuryPage() {
       setTxs([]);
       setAlreadyApproved({});
       setThreshold(1);
+      setOwnerAddresses([]);
       setOwnerOnChain(null);
       setLoading(false);
       return;
@@ -362,6 +373,18 @@ export default function TreasuryPage() {
             {loading ? "Loading…" : `${xlmBalance} XLM`}
           </p>
         </div>
+      </div>
+
+      <div className="mb-8 bg-white border border-gray-200 rounded-xl p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Multisig configuration</h2>
+        <p className="text-sm text-gray-500">
+          {threshold}-of-{ownerAddresses.length || "?"} multisig
+        </p>
+        {ownerAddresses.length > 0 && (
+          <p className="text-xs text-gray-500 mt-2">
+            On-chain owners: {ownerAddresses.map((address) => `${address.slice(0, 6)}...${address.slice(-4)}`).join(", ")}
+          </p>
+        )}
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">

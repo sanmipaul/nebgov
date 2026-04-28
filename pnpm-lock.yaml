@@ -190,6 +190,28 @@ importers:
         specifier: ^5.3.3
         version: 5.9.3
 
+  packages/cli:
+    dependencies:
+      '@nebgov/sdk':
+        specifier: workspace:*
+        version: link:../../sdk
+      '@stellar/stellar-sdk':
+        specifier: ^12.0.0
+        version: 12.3.0
+      commander:
+        specifier: ^12.1.0
+        version: 12.1.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.37
+      tsx:
+        specifier: ^4.20.6
+        version: 4.21.0
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
   packages/indexer:
     dependencies:
       '@asteasolutions/zod-to-openapi':
@@ -2725,6 +2747,10 @@ packages:
 
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
+
+  commander@12.1.0:
+    resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
+    engines: {node: '>=18'}
 
   commander@14.0.3:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
@@ -7793,7 +7819,7 @@ snapshots:
   '@stellar/stellar-sdk@13.3.0':
     dependencies:
       '@stellar/stellar-base': 13.1.0
-      axios: 1.13.6
+      axios: 1.14.0
       bignumber.js: 9.3.1
       eventsource: 2.0.2
       feaxios: 0.0.23
@@ -9342,6 +9368,8 @@ snapshots:
       delayed-stream: 1.0.0
 
   comma-separated-tokens@2.0.3: {}
+
+  commander@12.1.0: {}
 
   commander@14.0.3: {}
 
