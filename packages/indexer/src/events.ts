@@ -2,6 +2,32 @@ import { SorobanRpc, scValToNative } from "@stellar/stellar-sdk";
 import { pool } from "./db";
 import { invalidate, invalidatePattern } from "./cache";
 
+/**
+ * Normalises both legacy short-symbol topics (e.g. "prop_crtd") and the newer
+ * PascalCase topics (e.g. "ProposalCreated") to a single canonical name so the
+ * switch-case below can handle both contract versions without duplication.
+ */
+const TOPIC_MAP: Record<string, string> = {
+  // Legacy → canonical
+  prop_crtd: "ProposalCreated",
+  vote: "VoteCast",
+  vote_rsn: "VoteCastWithReason",
+  queued: "ProposalQueued",
+  executed: "ProposalExecuted",
+  delegate: "DelegateChanged",
+  config_updated: "ConfigUpdated",
+  upgraded: "GovernorUpgraded",
+  // New-form (already canonical — identity mappings keep the map exhaustive)
+  ProposalCreated: "ProposalCreated",
+  VoteCast: "VoteCast",
+  VoteCastWithReason: "VoteCastWithReason",
+  ProposalQueued: "ProposalQueued",
+  ProposalExecuted: "ProposalExecuted",
+  DelegateChanged: "DelegateChanged",
+  ConfigUpdated: "ConfigUpdated",
+  GovernorUpgraded: "GovernorUpgraded",
+};
+
 export interface IndexerConfig {
   rpcUrl: string;
   governorAddress: string;
@@ -51,7 +77,8 @@ export async function processEvents(
       if (ledger > latestLedger) latestLedger = ledger;
 
       const topics = event.topic.map((t) => scValToNative(t));
-      const eventType = topics[0] as string;
+      const rawEventType = topics[0] as string;
+      const eventType = TOPIC_MAP[rawEventType] ?? rawEventType;
       // Soroban EventResponse includes contractId for contract events.
       const contractId = (event as any).contractId as string | undefined;
       const isWrapper = !!(
@@ -77,12 +104,14 @@ export async function processEvents(
         } else if (isWrapper) {
           switch (eventType) {
             case "deposit":
+            case "Deposit":
               await handleWrapperDeposit(event, topics);
               break;
             case "withdraw":
+            case "Withdraw":
               await handleWrapperWithdraw(event, topics);
               break;
-            case "delegate":
+            case "DelegateChanged":
               await handleDelegateChanged(event, topics);
               break;
             default:
@@ -90,29 +119,27 @@ export async function processEvents(
           }
         } else {
           switch (eventType) {
-            case "prop_crtd":
+            case "ProposalCreated":
               await handleProposalCreated(event, topics);
               break;
-            case "vote":
+            case "VoteCast":
               await handleVoteCast(event, topics, false);
               break;
-            case "vote_rsn":
+            case "VoteCastWithReason":
               await handleVoteCast(event, topics, true);
               break;
-            case "queued":
+            case "ProposalQueued":
               await handleProposalQueued(topics);
               break;
-            case "executed":
+            case "ProposalExecuted":
               await handleProposalExecuted(topics);
               break;
-            case "delegate":
+            case "DelegateChanged":
               await handleDelegateChanged(event, topics);
               break;
-            case "config_updated":
             case "ConfigUpdated":
               await handleConfigUpdated(event, topics);
               break;
-            case "upgraded":
             case "GovernorUpgraded":
               await handleGovernorUpgraded(event, topics);
               break;

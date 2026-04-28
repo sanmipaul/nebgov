@@ -12,7 +12,7 @@
  * });
  */
 
-export { GovernorClient } from "./governor";
+export { GovernorClient, hashDescription, uploadProposalMetadata } from "./governor";
 export { VotesClient } from "./votes";
 export type { TopDelegatesOptions, TopDelegatesResult } from "./votes";
 export { FactoryClient } from "./factory";
