@@ -84,8 +84,10 @@ export class VotesClient {
 
   /**
    * Explicitly revoke delegation and move voting power back to self.
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
    */
-  async undelegate(signer: Keypair): Promise<void> {
+  async undelegate(signer: Keypair): Promise<string> {
     return this.retry(async () => {
       const account = await this.server.getAccount(signer.publicKey());
 
@@ -108,20 +110,25 @@ export class VotesClient {
       if (result.status === "ERROR") {
         throw parseVotesError(result);
       }
+      return result.hash;
     }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
    * Backwards-compatible alias for {@link undelegate}.
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
    */
-  async revokeDelegation(signer: Keypair): Promise<void> {
+  async revokeDelegation(signer: Keypair): Promise<string> {
     return this.undelegate(signer);
   }
 
   /**
-   * Delegate voting power to another address (or self-delegate).
+   * Delegate voting power to another address (or self-delegate to activate votes).
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
    */
-  async delegate(signer: Keypair, delegatee: string): Promise<void> {
+  async delegate(signer: Keypair, delegatee: string): Promise<string> {
     return this.retry(async () => {
       const account = await this.server.getAccount(signer.publicKey());
 
@@ -145,6 +152,7 @@ export class VotesClient {
       if (result.status === "ERROR") {
         throw parseVotesError(result);
       }
+      return result.hash;
     }, (e) => this.isRetryableSubmissionError(e));
   }
 
@@ -187,7 +195,11 @@ export class VotesClient {
   }
 
   /**
-   * Get current voting power of an address.
+   * Get the current voting power of an address.
+   *
+   * @param account Stellar address to query.
+   * @returns Raw voting-power units (divide by token decimals for display).
+   *   Returns `0n` if the address has not self-delegated.
    */
   async getVotes(account: string): Promise<bigint> {
     return this.retry(async () => {
@@ -214,7 +226,11 @@ export class VotesClient {
   }
 
   /**
-   * Get voting power at a past ledger sequence.
+   * Get voting power of an address at a past ledger sequence.
+   *
+   * @param account Stellar address to query.
+   * @param ledger Ledger sequence number to query at.
+   * @returns Raw voting-power units at the specified ledger, or `0n` on error.
    */
   async getPastVotes(account: string, ledger: number): Promise<bigint> {
     return this.retry(async () => {

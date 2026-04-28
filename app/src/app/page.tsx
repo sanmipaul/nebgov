@@ -4,8 +4,9 @@
  * Proposals list page — the main landing page.
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams, useRouter } from "next/navigation";
 import { GovernorClient, ProposalState, Network } from "@nebgov/sdk";
 
 interface ProposalSummary {
@@ -25,13 +26,14 @@ const STATE_COLORS: Record<ProposalState, string> = {
   [ProposalState.Queued]: "bg-purple-100 text-purple-800",
   [ProposalState.Executed]: "bg-gray-100 text-gray-800",
   [ProposalState.Cancelled]: "bg-gray-100 text-gray-500",
+  [ProposalState.Expired]: "bg-orange-100 text-orange-700",
 };
+
+const ALL_STATES = Object.values(ProposalState);
+type SortOption = "newest" | "most-votes" | "ending-soon";
 
 const PROPOSALS_PER_PAGE = 10;
 
-/**
- * Loading skeleton for proposal cards
- */
 function ProposalSkeleton() {
   return (
     <div className="block bg-white border border-gray-200 rounded-xl p-6 animate-pulse">
@@ -50,13 +52,52 @@ function ProposalSkeleton() {
   );
 }
 
-export default function ProposalsPage() {
+function ProposalsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const search = searchParams.get("q") ?? "";
+  const stateFilter = (searchParams.get("state") ?? "all") as ProposalState | "all";
+  const sort = (searchParams.get("sort") ?? "newest") as SortOption;
+
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<number | undefined>();
   const [hasMore, setHasMore] = useState(false);
+
+  function setParam(key: string, value: string, defaultVal = "") {
+    const q = new URLSearchParams(searchParams.toString());
+    if (value && value !== defaultVal) {
+      q.set(key, value);
+    } else {
+      q.delete(key);
+    }
+    router.replace(`?${q.toString()}`);
+  }
+
+  const filtered = useMemo(() => {
+    let result = proposals;
+    if (stateFilter !== "all") {
+      result = result.filter((p) => p.state === stateFilter);
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      result = result.filter((p) => p.description.toLowerCase().includes(q));
+    }
+    const sorted = [...result];
+    if (sort === "newest") {
+      sorted.sort((a, b) => (b.id > a.id ? 1 : b.id < a.id ? -1 : 0));
+    } else if (sort === "most-votes") {
+      sorted.sort((a, b) =>
+        Number((b.votesFor + b.votesAgainst) - (a.votesFor + a.votesAgainst))
+      );
+    } else if (sort === "ending-soon") {
+      sorted.sort((a, b) => (a.endLedger || Infinity) - (b.endLedger || Infinity));
+    }
+    return sorted;
+  }, [proposals, stateFilter, search, sort]);
 
   const fetchProposals = async (cursor?: number, append = false) => {
     if (append) {
@@ -67,41 +108,33 @@ export default function ProposalsPage() {
     setError(null);
 
     try {
-      // Read environment variables
       const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
       const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
       const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-      const network = (process.env.NEXT_PUBLIC_NETWORK ||
-        "testnet") as Network;
+      const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
       const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
       const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
 
-      // Validate required environment variables
       if (!governorAddress || !timelockAddress || !votesAddress) {
         throw new Error(
           "Missing required environment variables. Please check .env.local configuration.",
         );
       }
 
-      // Try indexer first if available
       if (indexerUrl) {
         try {
           const url = new URL(`${indexerUrl}/proposals`);
-          url.searchParams.set('limit', PROPOSALS_PER_PAGE.toString());
-          if (cursor) {
-            url.searchParams.set('before', cursor.toString());
-          }
+          url.searchParams.set("limit", PROPOSALS_PER_PAGE.toString());
+          if (cursor) url.searchParams.set("before", cursor.toString());
 
           const response = await fetch(url.toString());
           if (response.ok) {
             const data = await response.json();
-            
             if (append) {
-              setProposals(prev => [...prev, ...data.proposals]);
+              setProposals((prev) => [...prev, ...data.proposals]);
             } else {
               setProposals(data.proposals);
             }
-            
             setNextCursor(data.nextCursor);
             setHasMore(data.hasMore || false);
             return;
@@ -111,7 +144,6 @@ export default function ProposalsPage() {
         }
       }
 
-      // Fall back to on-chain queries
       const client = new GovernorClient({
         governorAddress,
         timelockAddress,
@@ -120,41 +152,36 @@ export default function ProposalsPage() {
         ...(rpcUrl && { rpcUrl }),
       });
 
-      // Get total proposal count
       const count = await client.proposalCount();
-
       if (count === 0n) {
         setProposals([]);
         setHasMore(false);
         return;
       }
 
-      // For on-chain fallback, use simple pagination
-      const currentPage = cursor ? Math.floor((Number(count) - cursor) / PROPOSALS_PER_PAGE) + 1 : 1;
+      const currentPage = cursor
+        ? Math.floor((Number(count) - cursor) / PROPOSALS_PER_PAGE) + 1
+        : 1;
       const startIdx = Number(count) - (currentPage - 1) * PROPOSALS_PER_PAGE;
       const endIdx = Math.max(startIdx - PROPOSALS_PER_PAGE, 0);
 
-      // Fetch proposals in reverse order (newest first)
       const proposalPromises: Promise<ProposalSummary | null>[] = [];
       for (let i = startIdx; i > endIdx && i > 0; i--) {
         proposalPromises.push(
           (async () => {
             try {
               const proposalId = BigInt(i);
-
-              // Fetch state and votes in parallel
               const [state, votes] = await Promise.all([
                 client.getProposalState(proposalId),
                 client.getProposalVotes(proposalId),
               ]);
-
               return {
                 id: proposalId,
-                description: `Proposal ${i}`, // TODO: Fetch actual description in future issue
+                description: `Proposal ${i}`,
                 state,
                 votesFor: votes.votesFor,
                 votesAgainst: votes.votesAgainst,
-                endLedger: 0, // TODO: Fetch actual endLedger in future issue
+                endLedger: 0,
               };
             } catch (err) {
               console.error(`Error fetching proposal ${i}:`, err);
@@ -165,17 +192,14 @@ export default function ProposalsPage() {
       }
 
       const results = await Promise.all(proposalPromises);
-      const validProposals = results.filter(
-        (p): p is ProposalSummary => p !== null,
-      );
+      const validProposals = results.filter((p): p is ProposalSummary => p !== null);
 
       if (append) {
-        setProposals(prev => [...prev, ...validProposals]);
+        setProposals((prev) => [...prev, ...validProposals]);
       } else {
         setProposals(validProposals);
       }
-      
-      // Set cursor for next page
+
       if (validProposals.length > 0) {
         setNextCursor(Number(validProposals[validProposals.length - 1].id));
         setHasMore(endIdx > 0);
@@ -184,9 +208,7 @@ export default function ProposalsPage() {
       }
     } catch (err) {
       console.error("Error fetching proposals:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to load proposals",
-      );
+      setError(err instanceof Error ? err.message : "Failed to load proposals");
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -195,6 +217,7 @@ export default function ProposalsPage() {
 
   useEffect(() => {
     fetchProposals();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadMore = () => {
@@ -205,12 +228,11 @@ export default function ProposalsPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Proposals</h1>
-          <p className="text-gray-500 mt-1">
-            Vote on governance decisions for this protocol.
-          </p>
+          <p className="text-gray-500 mt-1">Vote on governance decisions for this protocol.</p>
         </div>
         <Link
           href="/propose"
@@ -220,12 +242,59 @@ export default function ProposalsPage() {
         </Link>
       </div>
 
-      {/* Error state */}
+      {/* Search + Sort */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <input
+          type="search"
+          placeholder="Search proposals…"
+          value={search}
+          onChange={(e) => setParam("q", e.target.value)}
+          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          aria-label="Search proposals"
+        />
+        <select
+          value={sort}
+          onChange={(e) => setParam("sort", e.target.value, "newest")}
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          aria-label="Sort proposals"
+        >
+          <option value="newest">Newest first</option>
+          <option value="most-votes">Most votes</option>
+          <option value="ending-soon">Ending soon</option>
+        </select>
+      </div>
+
+      {/* Status filter tabs */}
+      <div className="flex flex-wrap gap-2 mb-6" role="group" aria-label="Filter by status">
+        <button
+          onClick={() => setParam("state", "all", "all")}
+          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+            stateFilter === "all"
+              ? "bg-indigo-600 text-white border-indigo-600"
+              : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400"
+          }`}
+        >
+          All
+        </button>
+        {ALL_STATES.map((s) => (
+          <button
+            key={s}
+            onClick={() => setParam("state", s, "all")}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+              stateFilter === s
+                ? "bg-indigo-600 text-white border-indigo-600"
+                : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400"
+            }`}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {/* Error */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-          <p className="text-red-800 text-sm font-medium">
-            Error loading proposals
-          </p>
+          <p className="text-red-800 text-sm font-medium">Error loading proposals</p>
           <p className="text-red-600 text-sm mt-1">{error}</p>
         </div>
       )}
@@ -239,28 +308,15 @@ export default function ProposalsPage() {
         </div>
       )}
 
-      {/* Empty state */}
+      {/* Empty — no proposals at all */}
       {!loading && !error && proposals.length === 0 && (
         <div className="text-center py-16">
-          <svg
-            className="mx-auto h-12 w-12 text-gray-400"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-            />
+          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">
-            No proposals
-          </h3>
-          <p className="mt-1 text-sm text-gray-500">
-            Get started by creating a new proposal.
-          </p>
+          <h3 className="mt-2 text-sm font-medium text-gray-900">No proposals</h3>
+          <p className="mt-1 text-sm text-gray-500">Get started by creating a new proposal.</p>
           <div className="mt-6">
             <Link
               href="/propose"
@@ -272,11 +328,24 @@ export default function ProposalsPage() {
         </div>
       )}
 
+      {/* Empty — filters produced no results */}
+      {!loading && !error && proposals.length > 0 && filtered.length === 0 && (
+        <div className="text-center py-12">
+          <p className="text-gray-500 text-sm">No proposals match your current filters.</p>
+          <button
+            onClick={() => router.replace("?")}
+            className="mt-3 text-indigo-600 text-sm hover:underline"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+
       {/* Proposals list */}
-      {!loading && !error && proposals.length > 0 && (
+      {!loading && !error && filtered.length > 0 && (
         <>
           <div className="space-y-4">
-            {proposals.map((p) => (
+            {filtered.map((p) => (
               <Link
                 key={p.id.toString()}
                 href={`/proposal/${p.id}`}
@@ -284,20 +353,13 @@ export default function ProposalsPage() {
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-400 mb-1">
-                      Proposal #{p.id.toString()}
-                    </p>
+                    <p className="text-xs text-gray-400 mb-1">Proposal #{p.id.toString()}</p>
                     <h2 className="text-lg font-semibold text-gray-900 truncate">
                       {p.description}
                     </h2>
                     <div className="mt-3 flex items-center gap-4 text-sm text-gray-500">
-                      <span>
-                        For: {(Number(p.votesFor) / 1e7).toLocaleString()}
-                      </span>
-                      <span>
-                        Against:{" "}
-                        {(Number(p.votesAgainst) / 1e7).toLocaleString()}
-                      </span>
+                      <span>For: {(Number(p.votesFor) / 1e7).toLocaleString()}</span>
+                      <span>Against: {(Number(p.votesAgainst) / 1e7).toLocaleString()}</span>
                     </div>
                   </div>
                   <span
@@ -312,7 +374,6 @@ export default function ProposalsPage() {
             ))}
           </div>
 
-          {/* Load More Button */}
           {hasMore && (
             <div className="mt-8 text-center">
               <button
@@ -327,5 +388,26 @@ export default function ProposalsPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function ProposalsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="max-w-4xl mx-auto px-4 py-8">
+          <div className="space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="block bg-white border border-gray-200 rounded-xl p-6 animate-pulse">
+                <div className="h-5 bg-gray-200 rounded w-3/4 mb-3"></div>
+                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      }
+    >
+      <ProposalsPageInner />
+    </Suspense>
   );
 }

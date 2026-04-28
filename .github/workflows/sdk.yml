@@ -97,3 +97,12 @@ jobs:
         with:
           name: sdk-dist
           path: sdk/dist/
+
+      - name: Generate docs
+        run: pnpm --filter @nebgov/sdk run docs
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-docs
+          path: sdk/docs/

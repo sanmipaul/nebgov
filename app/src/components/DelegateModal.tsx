@@ -6,6 +6,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Keypair } from "@stellar/stellar-sdk";
+import toast from "react-hot-toast";
 import { VotesClient, type Network } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
 
@@ -47,6 +48,15 @@ function getDelegateSigner(): Keypair {
   return Keypair.fromSecret(secret);
 }
 
+function explorerTxUrl(txHash: string): string {
+  const network = process.env.NEXT_PUBLIC_NETWORK || "testnet";
+  const base =
+    network === "mainnet"
+      ? "https://stellar.expert/explorer/public"
+      : "https://stellar.expert/explorer/testnet";
+  return `${base}/tx/${txHash}`;
+}
+
 export function DelegateModal({
   open,
   onClose,
@@ -81,10 +91,21 @@ export function DelegateModal({
 
       const client = getVotesClientFromEnv();
       const signer = getDelegateSigner();
-      await client.delegate(signer, delegatee.trim());
-
+      const txHash = await client.delegate(signer, delegatee.trim());
+      toast.success(
+        <div>
+          Delegation submitted!{" "}
+          <a href={explorerTxUrl(txHash)} target="_blank" rel="noreferrer" className="underline">
+            View on Explorer →
+          </a>
+        </div>,
+        { duration: 8000 },
+      );
       onDelegated?.();
       onClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Delegation failed: ${msg}`);
     } finally {
       setSubmitting(false);
     }
@@ -92,17 +113,29 @@ export function DelegateModal({
 
   async function handleUndelegate() {
     if (!isConnected || !publicKey) {
-      throw new Error("Connect your wallet first.");
+      toast.error("Connect your wallet first.");
+      return;
     }
 
     setSubmitting(true);
     try {
       const client = getVotesClientFromEnv();
       const signer = getDelegateSigner();
-      await client.undelegate(signer);
-
+      const txHash = await client.undelegate(signer);
+      toast.success(
+        <div>
+          Undelegation submitted!{" "}
+          <a href={explorerTxUrl(txHash)} target="_blank" rel="noreferrer" className="underline">
+            View on Explorer →
+          </a>
+        </div>,
+        { duration: 8000 },
+      );
       onDelegated?.();
       onClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Undelegation failed: ${msg}`);
     } finally {
       setSubmitting(false);
     }

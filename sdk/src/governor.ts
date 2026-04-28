@@ -264,6 +264,9 @@ export class GovernorClient {
 
   /**
    * Same as {@link propose} but signs with a wallet callback (unsigned XDR in → signed XDR out).
+   *
+   * @returns An object containing the new `proposalId` and the Stellar `txHash`,
+   *   both suitable for UI display and block-explorer linking.
    */
   async proposeWithSign(
     signerPublicKey: string,
@@ -274,7 +277,7 @@ export class GovernorClient {
     fnNames: string[],
     calldatas: (Buffer | Uint8Array)[],
     signUnsignedXdr: (xdr: string) => Promise<string>,
-  ): Promise<bigint> {
+  ): Promise<{ proposalId: bigint; txHash: string }> {
     if (
       targets.length !== fnNames.length ||
       targets.length !== calldatas.length
@@ -321,7 +324,8 @@ export class GovernorClient {
     }
     const confirmed = await this.pollForConfirmation(result.hash);
     const returnVal = confirmed.returnValue;
-    return returnVal ? BigInt(scValToNative(returnVal)) : 0n;
+    const proposalId = returnVal ? BigInt(scValToNative(returnVal)) : 0n;
+    return { proposalId, txHash: result.hash };
   }
 
   /** Minimum voting power required to create a proposal (`proposal_threshold`). */
@@ -697,11 +701,16 @@ export class GovernorClient {
   /**
    * Cast a vote on an active proposal.
    */
+  /**
+   * Cast a vote on an active proposal.
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
+   */
   async castVote(
     signer: Keypair,
     proposalId: bigint,
     support: VoteSupport,
-  ): Promise<void> {
+  ): Promise<string> {
     return this.retry(async () => {
       const account = await this.server.getAccount(signer.publicKey());
 
@@ -731,6 +740,7 @@ export class GovernorClient {
         throw new Error(`castVote failed: ${JSON.stringify(result)}`);
       }
       await this.pollForConfirmation(result.hash);
+      return result.hash;
     }, (e) => this.isRetryableSubmissionError(e));
   }
 

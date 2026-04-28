@@ -2,19 +2,30 @@
  * NebGov SDK — core types
  */
 
+/** Stellar network identifier. */
 export type Network = "mainnet" | "testnet" | "futurenet";
 
+/** On-chain lifecycle state of a governance proposal. */
 export enum ProposalState {
+  /** Created but voting has not started yet. */
   Pending = "Pending",
+  /** Voting is currently open. */
   Active = "Active",
+  /** Voting closed; quorum or majority not reached. */
   Defeated = "Defeated",
+  /** Voting closed; quorum and majority reached — awaiting queue or execution. */
   Succeeded = "Succeeded",
+  /** Queued in the timelock, awaiting the execution delay. */
   Queued = "Queued",
+  /** Successfully executed on-chain. */
   Executed = "Executed",
+  /** Cancelled by the proposer or guardian. */
   Cancelled = "Cancelled",
+  /** Queued but not executed before the execution deadline. */
   Expired = "Expired",
 }
 
+/** Thrown when an unrecognised on-chain proposal-state variant is encountered. */
 export class UnknownProposalStateError extends Error {
   constructor(variant: string) {
     super(`Unknown proposal state: ${variant}`);
@@ -22,41 +33,69 @@ export class UnknownProposalStateError extends Error {
   }
 }
 
+/** How a voter casts their ballot. */
 export enum VoteSupport {
+  /** Vote against the proposal. */
   Against = 0,
+  /** Vote in favour of the proposal. */
   For = 1,
+  /** Formally participate without choosing a side. */
   Abstain = 2,
 }
 
+/** Voting mechanism used by the governor. */
 export enum VoteType {
+  /** One token = one vote. */
   Simple = "Simple",
+  /** Extended voting with configurable time-weight. */
   Extended = "Extended",
+  /** Square-root of token balance used as vote weight. */
   Quadratic = "Quadratic",
 }
 
+/** Full on-chain representation of a governance proposal. */
 export interface Proposal {
+  /** Unique numeric identifier assigned at creation. */
   id: bigint;
+  /** Stellar address that submitted the proposal. */
   proposer: string;
+  /** Human-readable summary stored on-chain. */
   description: string;
+  /** Ledger sequence at which voting opens. */
   startLedger: number;
+  /** Ledger sequence at which voting closes. */
   endLedger: number;
+  /** Accumulated votes in favour. */
   votesFor: bigint;
+  /** Accumulated votes against. */
   votesAgainst: bigint;
+  /** Accumulated abstain votes. */
   votesAbstain: bigint;
+  /** Whether the proposal has been executed. */
   executed: boolean;
+  /** Whether the proposal was cancelled. */
   cancelled: boolean;
 }
 
+/** Input parameters for creating a single-action proposal. */
 export interface ProposalInput {
+  /** Human-readable proposal summary. */
   description: string;
+  /** Target contract address for the on-chain action. */
   target: string;
+  /** Function name to invoke on the target. */
   fnName: string;
+  /** ABI-encoded call arguments. */
   calldata: Buffer | Uint8Array;
 }
 
+/** Aggregated vote tallies for a proposal. */
 export interface ProposalVotes {
+  /** Total tokens cast in favour. */
   votesFor: bigint;
+  /** Total tokens cast against. */
   votesAgainst: bigint;
+  /** Total tokens cast as abstain. */
   votesAbstain: bigint;
 }
 

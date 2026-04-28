@@ -13,6 +13,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import toast from "react-hot-toast";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -81,6 +82,30 @@ function isReasonableIpfsRef(s: string): boolean {
   );
 }
 
+function explorerTxUrl(txHash: string): string {
+  const network = process.env.NEXT_PUBLIC_NETWORK || "testnet";
+  const base =
+    network === "mainnet"
+      ? "https://stellar.expert/explorer/public"
+      : "https://stellar.expert/explorer/testnet";
+  return `${base}/tx/${txHash}`;
+}
+
+function getClients() {
+  const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
+  const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
+  const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+  const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as "mainnet" | "testnet" | "futurenet";
+  const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+  if (!governorAddress || !timelockAddress || !votesAddress) return null;
+  const cfg = { governorAddress, timelockAddress, votesAddress, network, ...(rpcUrl ? { rpcUrl } : {}) };
+  return {
+    governor: new GovernorClient(cfg),
+    votes: new VotesClient(cfg),
+    governorAddress,
+  };
+}
+
 function buildDescription(title: string, desc: string, ipfs: string): string {
   // We store the title + description content on-chain as a single string
   // and we also store the IPFS link for rich metadata access.
@@ -121,7 +146,8 @@ function getActionCalldataHex(args: CalldataArgRow[]): string {
 function ProposeWizardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isConnected, publicKey, clients, signTransaction } = useWallet();
+  const { isConnected, publicKey, signTransaction } = useWallet();
+  const clients = useMemo(() => getClients(), []);
 
   const stepParam = searchParams.get("step");
   const successIdParam = searchParams.get("id");
@@ -151,7 +177,7 @@ function ProposeWizardInner() {
   const [votes, setVotes] = useState<bigint | null>(null);
   const [threshold, setThreshold] = useState<bigint | null>(null);
   const [canProposeResult, setCanProposeResult] = useState<{ canPropose: boolean; reason?: string; availableAtLedger?: number } | null>(null);
-  const [estimate, setEstimate] = useState<{ cpuInsns: bigint; memBytes: bigint } | null>(null);
+  const [estimate, setEstimate] = useState<{ cpuInsns?: string; memBytes?: string } | null>(null);
   const [estimateErr, setEstimateErr] = useState<string | null>(null);
   const [simBusy, setSimBusy] = useState<string | null>(null);
 
@@ -410,7 +436,7 @@ function ProposeWizardInner() {
         draft.actions,
         clients.governorAddress,
       );
-      const id = await clients.governor.proposeWithSign(
+      const { proposalId, txHash } = await clients.governor.proposeWithSign(
         publicKey,
         description,
         draft.descriptionHash,
@@ -420,10 +446,19 @@ function ProposeWizardInner() {
         calldatas,
         signTransaction,
       );
+      toast.success(
+        <div>
+          Proposal submitted!{" "}
+          <a href={explorerTxUrl(txHash)} target="_blank" rel="noreferrer" className="underline">
+            View on Explorer →
+          </a>
+        </div>,
+        { duration: 8000 },
+      );
       sessionStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(STORAGE_KEY);
       setDraft({ title: "", description: "", descriptionHash: "", ipfsRef: "", actions: [], savedAt: 0, currentStep: 1 });
-      router.push(`/propose?step=4&id=${id.toString()}`);
+      router.push(`/propose?step=4&id=${proposalId.toString()}`);
     } catch (e: unknown) {
       setSubmitError(e instanceof Error ? e.message : "Submit failed");
     } finally {
