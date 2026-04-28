@@ -146,11 +146,21 @@ export class TimelockClient {
   }
 
   /**
-   * Schedule multiple timelock operations in a single transaction.
+   * Schedule multiple operations as a single atomic batch.
    *
-   * Every array argument must have the same length.
+   * All sub-operations share one `predecessor` and `salt`.  The contract
+   * returns a **single** hex-encoded `batch_op_id` covering the entire batch.
+   * Use {@link executeBatch} to run all sub-operations atomically.
    *
-   * @returns Hex-encoded operation IDs in the same order as the inputs.
+   * @param signer      - Keypair authorising the call (must be the governor signer)
+   * @param targets     - Contract addresses to invoke (one per sub-operation)
+   * @param data        - Encoded calldata for each target
+   * @param fnNames     - Function names for each target
+   * @param delay       - Delay in seconds; must be >= the contract's `minDelay`
+   * @param predecessor - Op-id of a previously completed operation that must
+   *                      execute before this batch (pass empty Buffer for none)
+   * @param salt        - Unique salt to disambiguate batches with identical inputs
+   * @returns Hex-encoded single batch op_id (SHA-256 of all tuples + predecessor + salt)
    */
   async scheduleBatch(
     signer: Keypair,
@@ -158,20 +168,15 @@ export class TimelockClient {
     data: Array<Buffer | Uint8Array>,
     fnNames: string[],
     delay: bigint,
-    predecessors: Array<Buffer | Uint8Array>,
-    salts: Array<Buffer | Uint8Array>,
-  ): Promise<string[]> {
+    predecessor: Buffer | Uint8Array,
+    salt: Buffer | Uint8Array,
+  ): Promise<string> {
     return this.retry(async () => {
       const len = targets.length;
       if (len === 0)
         throw new Error("scheduleBatch requires at least one operation");
-      if (
-        data.length !== len ||
-        fnNames.length !== len ||
-        predecessors.length !== len ||
-        salts.length !== len
-      ) {
-        throw new Error("scheduleBatch input arrays must have equal length");
+      if (data.length !== len || fnNames.length !== len) {
+        throw new Error("scheduleBatch: targets, data, and fnNames must have equal length");
       }
 
       const account = await this.server.getAccount(signer.publicKey());
@@ -183,12 +188,6 @@ export class TimelockClient {
       );
       const fnNamesScVal = xdr.ScVal.scvVec(
         fnNames.map((item) => nativeToScVal(item, { type: "symbol" })),
-      );
-      const predecessorsScVal = xdr.ScVal.scvVec(
-        predecessors.map((item) => nativeToScVal(item, { type: "bytes" })),
-      );
-      const saltsScVal = xdr.ScVal.scvVec(
-        salts.map((item) => nativeToScVal(item, { type: "bytes" })),
       );
 
       const tx = new TransactionBuilder(account, {
@@ -203,8 +202,8 @@ export class TimelockClient {
             dataScVal,
             fnNamesScVal,
             nativeToScVal(delay, { type: "u64" }),
-            predecessorsScVal,
-            saltsScVal,
+            nativeToScVal(predecessor, { type: "bytes" }),
+            nativeToScVal(salt, { type: "bytes" }),
           ),
         )
         .setTimeout(30)
@@ -222,8 +221,46 @@ export class TimelockClient {
       const returnVal = confirmed.returnValue;
       if (!returnVal) throw new Error("scheduleBatch: missing return value");
 
-      const rawIds = scValToNative(returnVal) as Uint8Array[];
-      return rawIds.map((bytes) => Buffer.from(bytes).toString("hex"));
+      const bytes = scValToNative(returnVal) as Uint8Array;
+      return Buffer.from(bytes).toString("hex");
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Execute a batch of operations atomically.
+   *
+   * All sub-operations run in sequence.  If any sub-call fails the entire
+   * transaction reverts and none of the sub-calls take effect.
+   *
+   * @param signer      - Keypair authorising the call (must be the governor signer)
+   * @param batchOpId   - Hex-encoded batch op_id returned by {@link scheduleBatch}
+   */
+  async executeBatch(signer: Keypair, batchOpId: string): Promise<void> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "execute_batch",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(Buffer.from(batchOpId, "hex"), { type: "bytes" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTimelockError(result);
+      }
+      await this.pollForConfirmation(result.hash);
     }, (e) => this.isRetryableSubmissionError(e));
   }
 

@@ -39,7 +39,8 @@ impl MockTarget {
 }
 
 #[test]
-fn test_schedule_batch_returns_ids_and_emits_event() {
+/// schedule_batch now returns a single batch_op_id and emits schbatch.
+fn test_schedule_batch_returns_single_id_and_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -61,24 +62,18 @@ fn test_schedule_batch_returns_ids_and_emits_event() {
     fn_names.push_back(Symbol::new(&env, "ping"));
     fn_names.push_back(Symbol::new(&env, "pong"));
 
-    let mut predecessors = Vec::new(&env);
-    predecessors.push_back(Bytes::new(&env));
-    predecessors.push_back(Bytes::new(&env));
-
-    let mut salts = Vec::new(&env);
-    salts.push_back(Bytes::from_array(&env, &[9u8]));
-    salts.push_back(Bytes::from_array(&env, &[8u8]));
-
-    let ids = client.schedule_batch(
+    let batch_op_id = client.schedule_batch(
         &governor,
         &targets,
         &payloads,
         &fn_names,
         &10,
-        &predecessors,
-        &salts,
+        &Bytes::new(&env),
+        &Bytes::from_array(&env, &[9u8]),
     );
-    assert_eq!(ids.len(), 2);
+
+    // Returns a single Bytes id (32-byte SHA-256)
+    assert_eq!(batch_op_id.len(), 32);
 
     let events = env.events().all();
     let has_batch_event = events.iter().any(|(_, topics, _)| {
@@ -88,6 +83,220 @@ fn test_schedule_batch_returns_ids_and_emits_event() {
         }
     });
     assert!(has_batch_event, "schedule_batch event not emitted");
+}
+
+#[test]
+/// schedule_batch with same inputs always produces the same batch_op_id.
+fn test_batch_op_id_is_deterministic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = Address::generate(&env);
+    let mut targets = Vec::new(&env);
+    targets.push_back(target.clone());
+
+    let mut datas = Vec::new(&env);
+    datas.push_back(Bytes::new(&env));
+
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "exec"));
+
+    let salt = Bytes::from_slice(&env, b"mysalt");
+
+    let id1 = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &Bytes::new(&env),
+        &salt,
+    );
+    // Same call again — same id
+    let id2 = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &Bytes::new(&env),
+        &salt,
+    );
+    assert_eq!(id1, id2);
+
+    // Different salt → different id
+    let salt2 = Bytes::from_slice(&env, b"othersalt");
+    let id3 = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &Bytes::new(&env),
+        &salt2,
+    );
+    assert_ne!(id1, id3);
+}
+
+#[test]
+/// execute_batch runs all sub-calls atomically and marks the batch as done.
+fn test_execute_batch_atomic() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target1 = env.register(MockTarget, ());
+    let target2 = env.register(MockTarget, ());
+
+    let mut targets = Vec::new(&env);
+    targets.push_back(target1.clone());
+    targets.push_back(target2.clone());
+
+    let mut datas = Vec::new(&env);
+    datas.push_back(Bytes::new(&env));
+    datas.push_back(Bytes::new(&env));
+
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "exec"));
+    fn_names.push_back(Symbol::new(&env, "exec"));
+
+    let batch_op_id = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"salt"),
+    );
+
+    // Not done yet
+    assert!(!client.is_batch_done(&batch_op_id));
+
+    // Advance past ready_at
+    env.ledger().with_mut(|l| l.timestamp = 1);
+    client.execute_batch(&governor, &batch_op_id);
+
+    // Both targets executed
+    let t1_done = env.as_contract(&target1, || MockTarget::was_executed(env.clone()));
+    let t2_done = env.as_contract(&target2, || MockTarget::was_executed(env.clone()));
+    assert!(t1_done, "target1 not executed");
+    assert!(t2_done, "target2 not executed");
+
+    // Batch is now done
+    assert!(client.is_batch_done(&batch_op_id));
+
+    // Double-execution should fail
+    let result = client.try_execute_batch(&governor, &batch_op_id);
+    assert!(result.is_err(), "second execute_batch should fail");
+}
+
+#[test]
+/// cancel() accepts a batch_op_id and prevents execute_batch from running.
+fn test_cancel_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let mut targets = Vec::new(&env);
+    targets.push_back(target);
+
+    let mut datas = Vec::new(&env);
+    datas.push_back(Bytes::new(&env));
+
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "exec"));
+
+    let batch_op_id = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"salt"),
+    );
+
+    // Cancel the batch
+    client.cancel(&admin, &batch_op_id);
+
+    // execute_batch should now fail
+    env.ledger().with_mut(|l| l.timestamp = 1);
+    let result = client.try_execute_batch(&governor, &batch_op_id);
+    assert!(result.is_err(), "execute_batch should fail after cancel");
+}
+
+#[test]
+/// A batch can use a single op as its predecessor; execute_batch blocks until predecessor is done.
+fn test_batch_predecessor_enforcement() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+
+    // Schedule single predecessor op
+    let pred_op_id = client.schedule(
+        &governor,
+        &target,
+        &Bytes::new(&env),
+        &Symbol::new(&env, "exec"),
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"pred_salt"),
+    );
+
+    // Schedule batch with pred_op_id as predecessor
+    let mut targets = Vec::new(&env);
+    targets.push_back(target.clone());
+
+    let mut datas = Vec::new(&env);
+    datas.push_back(Bytes::new(&env));
+
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "exec"));
+
+    let batch_id = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &pred_op_id,
+        &Bytes::from_slice(&env, b"batch_salt"),
+    );
+
+    env.ledger().with_mut(|l| l.timestamp = 1);
+
+    // execute_batch fails — predecessor not done
+    let result = client.try_execute_batch(&governor, &batch_id);
+    assert!(result.is_err(), "should block on predecessor");
+
+    // Execute predecessor
+    client.execute(&governor, &pred_op_id);
+    assert!(client.is_done(&pred_op_id));
+
+    // Now batch executes successfully
+    client.execute_batch(&governor, &batch_id);
+    assert!(client.is_batch_done(&batch_id));
 }
 
 #[test]

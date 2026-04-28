@@ -33,9 +33,27 @@ pub struct Operation {
     pub predecessor: Bytes,
 }
 
+/// A scheduled batch timelock operation.
+///
+/// Stores all sub-operations under a single `batch_op_id`.  Execution is
+/// all-or-nothing: if any sub-call panics, the entire batch reverts.
+#[contracttype]
+#[derive(Clone)]
+pub struct BatchOperation {
+    pub targets: Vec<Address>,
+    pub datas: Vec<Bytes>,
+    pub fn_names: Vec<Symbol>,
+    pub ready_at: u64,
+    pub expires_at: u64,
+    pub executed: bool,
+    pub cancelled: bool,
+    pub predecessor: Bytes,
+}
+
 #[contracttype]
 pub enum DataKey {
     Operation(Bytes),
+    BatchOperation(Bytes),
     MinDelay,
     ExecutionWindow,
     Admin,
@@ -82,6 +100,31 @@ impl TimelockContract {
         Bytes::from_array(&env, &hash.to_array())
     }
 
+    /// Compute a deterministic batch op_id from all sub-operation tuples combined
+    /// with a single predecessor and salt.
+    ///
+    /// Same inputs always produce the same ID, so scheduling is idempotent.
+    pub fn compute_batch_op_id(
+        env: Env,
+        targets: Vec<Address>,
+        datas: Vec<Bytes>,
+        fn_names: Vec<Symbol>,
+        predecessor: Bytes,
+        salt: Bytes,
+    ) -> Bytes {
+        let mut combined = Bytes::new(&env);
+        for i in 0..targets.len() {
+            combined.append(&targets.get(i).unwrap().to_xdr(&env));
+            combined.append(&datas.get(i).unwrap());
+            combined.append(&fn_names.get(i).unwrap().to_xdr(&env));
+        }
+        combined.append(&predecessor);
+        combined.append(&salt);
+
+        let hash = env.crypto().sha256(&combined);
+        Bytes::from_array(&env, &hash.to_array())
+    }
+
     /// Schedule a single operation.
     #[allow(clippy::too_many_arguments)]
     pub fn schedule(
@@ -99,46 +142,67 @@ impl TimelockContract {
         Self::schedule_operation(env, target, data, fn_name, delay, predecessor, salt)
     }
 
-    /// Schedule multiple operations in a single call.
+    /// Schedule multiple operations as a single atomic batch.
+    ///
+    /// Unlike the previous N-op-id design, this returns **one** `batch_op_id`
+    /// covering all sub-operations.  Use [`execute_batch`] to run them all at
+    /// once.  A single `predecessor` and `salt` apply to the whole batch.
     #[allow(clippy::too_many_arguments)]
     pub fn schedule_batch(
         env: Env,
         caller: Address,
         targets: Vec<Address>,
-        data: Vec<Bytes>,
+        datas: Vec<Bytes>,
         fn_names: Vec<Symbol>,
         delay: u64,
-        predecessors: Vec<Bytes>,
-        salts: Vec<Bytes>,
-    ) -> Vec<Bytes> {
+        predecessor: Bytes,
+        salt: Bytes,
+    ) -> Bytes {
         caller.require_auth();
         Self::require_governor(&env, &caller);
 
         let len = targets.len();
         assert!(len > 0, "empty batch");
-        assert!(len == data.len(), "length mismatch");
+        assert!(len == datas.len(), "length mismatch");
         assert!(len == fn_names.len(), "length mismatch");
-        assert!(len == predecessors.len(), "length mismatch");
-        assert!(len == salts.len(), "length mismatch");
 
-        let mut op_ids = Vec::new(&env);
-        for i in 0..len {
-            let op_id = Self::schedule_operation(
-                env.clone(),
-                targets.get(i).expect("target missing"),
-                data.get(i).expect("data missing"),
-                fn_names.get(i).expect("fn missing"),
-                delay,
-                predecessors.get(i).expect("predecessor missing"),
-                salts.get(i).expect("salt missing"),
-            );
-            op_ids.push_back(op_id);
-        }
+        Self::validate_predecessor(&env, &predecessor);
+
+        let min_delay = Self::min_delay(env.clone());
+        assert!(delay >= min_delay, "delay too short");
+
+        let execution_window = Self::execution_window(env.clone());
+        let ready_at = env.ledger().timestamp() + delay;
+        let expires_at = ready_at + execution_window;
+
+        let batch_op_id = Self::compute_batch_op_id(
+            env.clone(),
+            targets.clone(),
+            datas.clone(),
+            fn_names.clone(),
+            predecessor.clone(),
+            salt,
+        );
+
+        let batch = BatchOperation {
+            targets,
+            datas,
+            fn_names,
+            ready_at,
+            expires_at,
+            executed: false,
+            cancelled: false,
+            predecessor,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::BatchOperation(batch_op_id.clone()), &batch);
 
         env.events()
-            .publish((symbol_short!("schbatch"),), op_ids.clone());
+            .publish((symbol_short!("schbatch"),), batch_op_id.clone());
 
-        op_ids
+        batch_op_id
     }
 
     /// Execute a ready operation.
@@ -158,8 +222,12 @@ impl TimelockContract {
             env.panic_with_error(TimelockError::OperationExpired);
         }
 
-        if !op.predecessor.is_empty() && !Self::is_done(env.clone(), op.predecessor.clone()) {
-            env.panic_with_error(TimelockError::PredecessorNotDone);
+        if !op.predecessor.is_empty() {
+            let pred_done = Self::is_done(env.clone(), op.predecessor.clone())
+                || Self::is_batch_done(env.clone(), op.predecessor.clone());
+            if !pred_done {
+                env.panic_with_error(TimelockError::PredecessorNotDone);
+            }
         }
 
         op.executed = true;
@@ -173,7 +241,52 @@ impl TimelockContract {
         env.events().publish((symbol_short!("execute"),), op_id);
     }
 
-    /// Cancel a pending operation.
+    /// Execute a batch of operations atomically under a single `batch_op_id`.
+    ///
+    /// All sub-calls run in order.  If any sub-call panics, the entire
+    /// transaction reverts and none of the sub-calls take effect.
+    pub fn execute_batch(env: Env, caller: Address, batch_op_id: Bytes) {
+        caller.require_auth();
+        Self::require_governor(&env, &caller);
+
+        let mut batch: BatchOperation = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BatchOperation(batch_op_id.clone()))
+            .expect("batch not found");
+
+        assert!(!batch.executed && !batch.cancelled, "invalid state");
+        assert!(env.ledger().timestamp() >= batch.ready_at, "not ready");
+        if env.ledger().timestamp() > batch.expires_at {
+            env.panic_with_error(TimelockError::OperationExpired);
+        }
+
+        if !batch.predecessor.is_empty() {
+            let pred_done = Self::is_done(env.clone(), batch.predecessor.clone())
+                || Self::is_batch_done(env.clone(), batch.predecessor.clone());
+            if !pred_done {
+                env.panic_with_error(TimelockError::PredecessorNotDone);
+            }
+        }
+
+        batch.executed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::BatchOperation(batch_op_id.clone()), &batch);
+
+        for i in 0..batch.targets.len() {
+            let target = batch.targets.get(i).unwrap();
+            let fn_name = batch.fn_names.get(i).unwrap();
+            let data = batch.datas.get(i).unwrap();
+            let args = Self::decode_invocation_args(&env, &data);
+            env.invoke_contract::<()>(&target, &fn_name, args);
+        }
+
+        env.events()
+            .publish((symbol_short!("exbatch"),), batch_op_id);
+    }
+
+    /// Cancel a pending operation or batch operation.
     pub fn cancel(env: Env, caller: Address, op_id: Bytes) {
         caller.require_auth();
 
@@ -189,17 +302,31 @@ impl TimelockContract {
             .expect("not initialized");
         assert!(caller == admin || caller == governor, "not authorized");
 
-        let mut op: Operation = env
+        // Try single operation first, then batch operation.
+        if let Some(mut op) = env
             .storage()
             .persistent()
-            .get(&DataKey::Operation(op_id.clone()))
-            .expect("operation not found");
-        assert!(!op.executed && !op.cancelled, "invalid state");
-        op.cancelled = true;
-
-        env.storage()
+            .get::<_, Operation>(&DataKey::Operation(op_id.clone()))
+        {
+            assert!(!op.executed && !op.cancelled, "invalid state");
+            op.cancelled = true;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Operation(op_id.clone()), &op);
+        } else if let Some(mut batch) = env
+            .storage()
             .persistent()
-            .set(&DataKey::Operation(op_id.clone()), &op);
+            .get::<_, BatchOperation>(&DataKey::BatchOperation(op_id.clone()))
+        {
+            assert!(!batch.executed && !batch.cancelled, "invalid state");
+            batch.cancelled = true;
+            env.storage()
+                .persistent()
+                .set(&DataKey::BatchOperation(op_id.clone()), &batch);
+        } else {
+            panic!("operation not found");
+        }
+
         env.events().publish((symbol_short!("cancel"),), op_id);
     }
 
@@ -231,6 +358,18 @@ impl TimelockContract {
         let op: Option<Operation> = env.storage().persistent().get(&DataKey::Operation(op_id));
         match op {
             Some(op) => op.executed,
+            None => false,
+        }
+    }
+
+    /// Check whether a batch operation has been executed.
+    pub fn is_batch_done(env: Env, batch_op_id: Bytes) -> bool {
+        let batch: Option<BatchOperation> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BatchOperation(batch_op_id));
+        match batch {
+            Some(b) => b.executed,
             None => false,
         }
     }
@@ -342,11 +481,16 @@ impl TimelockContract {
             return;
         }
 
-        let exists = env
+        let op_exists = env
             .storage()
             .persistent()
             .has(&DataKey::Operation(predecessor.clone()));
-        if !exists {
+        let batch_exists = env
+            .storage()
+            .persistent()
+            .has(&DataKey::BatchOperation(predecessor.clone()));
+
+        if !op_exists && !batch_exists {
             env.panic_with_error(TimelockError::PredecessorNotFound);
         }
     }

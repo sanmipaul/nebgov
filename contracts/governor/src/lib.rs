@@ -60,11 +60,24 @@ pub trait TimelockTrait {
         predecessor: Bytes,
         salt: Bytes,
     ) -> Bytes;
+    #[allow(clippy::too_many_arguments)]
+    fn schedule_batch(
+        env: Env,
+        caller: Address,
+        targets: Vec<Address>,
+        datas: Vec<Bytes>,
+        fn_names: Vec<Symbol>,
+        delay: u64,
+        predecessor: Bytes,
+        salt: Bytes,
+    ) -> Bytes;
     fn execute(env: Env, caller: Address, op_id: Bytes);
+    fn execute_batch(env: Env, caller: Address, batch_op_id: Bytes);
     fn cancel(env: Env, caller: Address, op_id: Bytes);
     fn min_delay(env: Env) -> u64;
     fn execution_window(env: Env) -> u64;
     fn is_done(env: Env, op_id: Bytes) -> bool;
+    fn is_batch_done(env: Env, batch_op_id: Bytes) -> bool;
 }
 
 /// Cross-contract interface for the TokenVotes contract.
@@ -816,13 +829,28 @@ impl GovernorContract {
 
         let ready_at = env.ledger().timestamp() + delay;
 
-        // Schedule every action in the proposal (multi-action proposals).
+        // Schedule proposal actions via the timelock.
+        // Multi-action proposals use schedule_batch() — one batch_op_id for all
+        // actions — which reduces storage costs and enables atomic execution.
+        // Single-action proposals use the existing schedule() path.
         let mut op_ids: Vec<Bytes> = Vec::new(&env);
         let empty_bytes = Bytes::new(&env);
-        for i in 0..proposal.targets.len() {
-            let target = proposal.targets.get(i).unwrap();
-            let fn_name = proposal.fn_names.get(i).unwrap();
-            let calldata = proposal.calldatas.get(i).unwrap();
+
+        if proposal.targets.len() > 1 {
+            let batch_op_id = timelock.schedule_batch(
+                &gov_addr,
+                &proposal.targets,
+                &proposal.calldatas,
+                &proposal.fn_names,
+                &delay,
+                &empty_bytes,
+                &empty_bytes,
+            );
+            op_ids.push_back(batch_op_id);
+        } else {
+            let target = proposal.targets.get(0).unwrap();
+            let fn_name = proposal.fn_names.get(0).unwrap();
+            let calldata = proposal.calldatas.get(0).unwrap();
             let op_id = timelock.schedule(
                 &gov_addr,
                 &target,
@@ -889,11 +917,55 @@ impl GovernorContract {
         }
 
         let timelock = TimelockClient::new(&env, &timelock_addr);
-        for i in 0..proposal.op_ids.len() {
-            let op_id = proposal.op_ids.get(i).unwrap();
-            let target = proposal.targets.get(i).unwrap();
-            let fn_name = proposal.fn_names.get(i).unwrap();
-            let calldata = proposal.calldatas.get(i).unwrap();
+
+        // Multi-action proposals were batch-scheduled: one batch_op_id covers all
+        // actions.  Call execute_batch() for atomic all-or-nothing execution.
+        // Single-action proposals use the existing execute() path.
+        if proposal.targets.len() > 1 {
+            let batch_op_id = proposal.op_ids.get(0).unwrap();
+
+            let mut timelock_args: Vec<Val> = Vec::new(&env);
+            timelock_args.push_back(gov_addr.clone().into_val(&env));
+            timelock_args.push_back(batch_op_id.clone().into_val(&env));
+
+            let mut sub_invocations = Vec::new(&env);
+            for j in 0..proposal.targets.len() {
+                let target = proposal.targets.get(j).unwrap();
+                let fn_name = proposal.fn_names.get(j).unwrap();
+                let calldata = proposal.calldatas.get(j).unwrap();
+                let decoded_args = Self::decode_calldata_args(&env, &calldata);
+                if !decoded_args.is_empty() {
+                    let target_context = ContractContext {
+                        contract: target,
+                        fn_name,
+                        args: decoded_args,
+                    };
+                    sub_invocations.push_back(InvokerContractAuthEntry::Contract(
+                        SubContractInvocation {
+                            context: target_context,
+                            sub_invocations: Vec::new(&env),
+                        },
+                    ));
+                }
+            }
+
+            let mut auth_entries = Vec::new(&env);
+            auth_entries.push_back(InvokerContractAuthEntry::Contract(SubContractInvocation {
+                context: ContractContext {
+                    contract: timelock_addr.clone(),
+                    fn_name: Symbol::new(&env, "execute_batch"),
+                    args: timelock_args,
+                },
+                sub_invocations,
+            }));
+            env.authorize_as_current_contract(auth_entries);
+
+            timelock.execute_batch(&gov_addr, &batch_op_id);
+        } else {
+            let op_id = proposal.op_ids.get(0).unwrap();
+            let target = proposal.targets.get(0).unwrap();
+            let fn_name = proposal.fn_names.get(0).unwrap();
+            let calldata = proposal.calldatas.get(0).unwrap();
             let decoded_args = Self::decode_calldata_args(&env, &calldata);
 
             let mut timelock_args: Vec<Val> = Vec::new(&env);
@@ -926,7 +998,6 @@ impl GovernorContract {
             }));
             env.authorize_as_current_contract(auth_entries);
 
-            // The timelock will verify if the operation is ready (delay passed).
             timelock.execute(&gov_addr, &op_id);
         }
 
@@ -1812,11 +1883,6 @@ impl GovernorContract {
     /// Returns the contract's own address since upgrades are governance-gated.
     pub fn proxy_admin(env: Env) -> Address {
         env.current_contract_address()
-    }
-
-    /// Get a proposal by ID.
-    pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
-        Self::must_get_proposal(&env, proposal_id)
     }
 
     /// Get the ledger sequence when a proposal was queued.
