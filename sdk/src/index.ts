@@ -16,6 +16,7 @@ export { GovernorClient } from "./governor";
 export { VotesClient } from "./votes";
 export type { TopDelegatesOptions, TopDelegatesResult } from "./votes";
 export { FactoryClient } from "./factory";
+export type { GovernorEntry, DeploySettings } from "./factory";
 export { TimelockClient } from "./timelock";
 export { TreasuryClient } from "./treasury";
 export { WrapperClient } from "./wrapper";

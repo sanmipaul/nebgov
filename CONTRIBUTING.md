@@ -113,6 +113,8 @@ Browse [open issues](https://github.com/nebgov/nebgov/issues). Each issue is tag
 - `complexity: medium` - moderate implementation work
 - `complexity: high` - significant feature or architectural change
 
+When opening a new issue, please choose one of the repository's issue templates so your report includes all required details.
+
 Issues tagged `good first issue` are recommended for first-time contributors.
 
 ## Branch Naming

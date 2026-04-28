@@ -6,42 +6,49 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for suggesting a feature. Please describe it clearly.
+        Thank you for suggesting a feature. Please answer the questions below.
   - type: textarea
-    id: summary
+    id: problem_statement
     attributes:
-      label: Summary
-      description: A brief summary of the feature
+      label: Problem Statement
+      description: What problem does this feature solve?
     validations:
       required: true
   - type: textarea
-    id: motivation
-    attributes:
-      label: Motivation
-      description: Why is this feature needed? What problem does it solve?
-    validations:
-      required: true
-  - type: textarea
-    id: solution
+    id: proposed_solution
     attributes:
       label: Proposed Solution
-      description: How would you like this to work?
+      description: How should this work?
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives Considered
-      description: Any other approaches you considered
+      description: Any other approaches you evaluated
     validations:
       required: false
   - type: dropdown
-    id: implement
+    id: component
     attributes:
-      label: Would you implement this?
+      label: Affected Component
+      description: Which part of NebGov would this impact?
       options:
-        - "Yes"
-        - "No"
-        - Maybe with guidance
+        - contracts
+        - sdk
+        - frontend
+        - indexer
+        - backend
+    validations:
+      required: true
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Complexity Estimate
+      description: Estimated implementation effort
+      options:
+        - trivial
+        - medium
+        - high
     validations:
       required: true
